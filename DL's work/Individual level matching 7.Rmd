@@ -1,0 +1,482 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+#1 loading libraries
+```{r}
+library(geosphere)
+library(tidyverse)
+library(dagitty)
+library(brms)
+#library(reshape2)
+library(ggplot2)
+#library(installr)
+#library(devtools)
+library(forestplot)
+library(lqmm)
+
+
+#install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+#devtools::install_github("rmcelreath/rethinking")
+#had to do a bunch of shit to get this to work on laptop, including installing RTools, and deleting and updating a couple of old packages
+```
+
+#2 load and trim dataset
+```{r}
+# import data from megazord.csv
+# for David's laptop
+#match_model_data <- read.csv("C:\\Users\\David\\OneDrive - University of Lethbridge\\Research\\Adelaide's Warbler\\2022_Comm_Network\\Acoustic Analysis\\megazord.csv")
+
+# for David's desktop
+#match_model_data <- read.csv("C:\\Users\\david.logue\\OneDrive - University of Lethbridge\\Research\\Adelaide's Warbler\\2022_Comm_Network\\Acoustic Analysis\\megazord.csv")
+
+# for John's laptop
+match_model_data <- read.csv("C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\data\\megazord.csv")
+
+# remove non-songs, post-dawn, unmeasureable songs, acoustic outliers
+match_model_data_songs <- match_model_data %>%
+  filter(Data_Class == "song", Phase == "DC", LOKI == 0, acoustic_outlier == 0) %>% 
+  ungroup() %>%
+  arrange(DateTime, time_rel_sunrise)
+```
+
+#3 split neighbourhoods
+```{r}
+match_model_data_n <- filter(match_model_data_songs, neighbourhood == "north")
+                              
+match_model_data_c <- filter(match_model_data_songs, neighbourhood == "centre")
+```
+
+#4 dfs for north neighbourhood 
+```{r}
+# Get all unique focal IDs (excluding NAs)
+focal_ids <- unique(na.omit(match_model_data_n$ID))
+
+# Initialize an empty list to store the output dataframes
+focal_outputs_n <- list()
+
+# Loop through each focal ID
+for (focal_id in focal_ids) {
+  
+  # focals_data is just rows in which ID = focal_id
+  focals_data <- filter(match_model_data_n, ID == focal_id)
+  
+  # focal_rep is the unique set of USTs for the focal (including NA)
+  focal_rep <- unique(focals_data$UST)
+  
+  # focal_ind is all match_model_data_n rows that have a UST that is in focal's repertoire, not including NA 
+  focal_ind <- match_model_data_n %>% 
+    filter(UST %in% focal_rep & !is.na(UST))
+  
+  # take focal_ind and group by date (could be a problem?), create columns focal_next_UST to show the focal's next UST
+  focal_ind <- focal_ind %>%
+    group_by(date) %>%
+    mutate(focal_next_UST = if_else(ID == focal_id, UST, NA))  %>%
+    fill(focal_next_UST, .direction = "up") 
+  
+  # adds column focal_matches. If the focal bird is the singer, it can't be a match (thus "NA"). 
+  
+  # If the focal bird is not the singer, does the song type match focal's next song (within day). 
+  focal_ind <- focal_ind %>%
+    mutate(focal_matches = if_else(ID == focal_id, NA,
+                                   if_else(focal_next_UST == UST, 1, 0))) 
+  
+  # Coordinates for focal male and singing male
+  coords1 <- cbind(focal_ind$M1_Lat, focal_ind$M1_Lon)
+  coords2 <- cbind(focal_ind$Lat, focal_ind$Lon)
+  
+  # Distance matrix is a function of the two coordinate sets
+  dist_matrix <- distm(coords1, coords2, fun = distHaversine)
+  
+  # Take diagonal to estimate distances
+  focal_ind$dist_to_focal <- diag(dist_matrix)
+  
+  # Makes column "Focal_ID"
+  focal_ind$Focal_ID <- focal_id 
+  
+  # Makes column time_focals_last_song with the time of the focal's last song 
+  # NAs at the top of each day until the focal sings
+  focal_ind <- focal_ind %>%
+    group_by(date) %>%
+    mutate(time_focals_last_song = if_else(ID == focal_id, time_rel_sunrise, NA)) %>%
+    fill(time_focals_last_song, .direction = "down")  %>%
+    mutate(time_since_focals_last_song = time_rel_sunrise - time_focals_last_song) %>%
+    ungroup() %>%
+    # Makes "just_focal_time" column which contains the time of focal's songs
+    mutate(just_focal_time = ifelse(ID == focal_id , time_rel_sunrise, NA))
+  
+  # First groups by date AND UST (so code works within UST, within date), 
+  # then makes column "time_focals_last_rend_ST" which shows the time the focal last sang that ST.
+  # Fill that down (still within UST, within date) or else it just returns one value per focal song.
+  focal_ind <- focal_ind %>%
+    group_by(date, UST) %>%
+    mutate(time_focals_last_rend_ST = lag(just_focal_time)) %>%
+    fill(time_focals_last_rend_ST, .direction = "down")  %>%
+    mutate(time_since_focals_last_rend_ST = -1 * (time_focals_last_rend_ST - time_rel_sunrise))
+  
+  # Makes "lean" dataframe by selecting only the necessary variables, 
+  # then removing the focal's songs (which he cannot match) and ungrouping.
+  focal_ind_lean <- focal_ind %>%
+    select(index, Focal_ID, date, ID, time_rel_sunrise, UST, number_of_matches, 
+           does_it_match, focal_matches, dist_to_focal, time_since_focals_last_song, 
+           time_focals_last_rend_ST, time_since_focals_last_rend_ST, 
+           note_count:time_since_focals_last_rend_ST) %>%
+    filter(ID != focal_id) %>%
+    ungroup()
+  
+  # Save the lean dataframe to the list using a name like "LbOW_ind_lean"
+  output_name <- paste0(focal_id, "_ind_lean")
+  focal_outputs_n[[output_name]] <- focal_ind_lean
+}
+
+# You can now access the outputs like:
+# focal_outputs_n$LbOW_ind_lean
+# focal_outputs_n$TbTbLg_ind_lean
+TbTbLg_ind_lean_n <- focal_outputs_n$TbTbLg_ind_lean
+RRO_ind_lean_n <- focal_outputs_n$RRO_ind_lean
+LbOW_ind_lean_n <- focal_outputs_n$LbOW_ind_lean
+DgTbO_ind_lean_n <- focal_outputs_n$DgTbO_ind_lean
+YKY_ind_lean_n <- focal_outputs_n$YKY_ind_lean
+RbDgY_ind_lean_n <- focal_outputs_n$RbDgY_ind_lean
+```
+
+
+#5 dfs for centre neighbourhood
+```{r}
+# Get all unique focal IDs (excluding NAs)
+focal_ids <- unique(na.omit(match_model_data_c$ID))
+
+# Initialize an empty list to store the output dataframes
+focal_outputs_c <- list()
+
+# Loop through each focal ID
+for (focal_id in focal_ids) {
+  
+  # focals_data is just rows in which ID = focal_id
+  focals_data <- filter(match_model_data_c, ID == focal_id)
+  
+  # focal_rep is the unique set of USTs for the focal (including NA)
+  focal_rep <- unique(focals_data$UST)
+  
+  # focal_ind is all match_model_data_n rows that have a UST that is in focal's repertoire, not including NA 
+  focal_ind <- match_model_data_c %>% 
+    filter(UST %in% focal_rep & !is.na(UST))
+  
+  # take focal_ind and group by date (could be a problem?), create columns focal_next_UST to show the focal's next UST
+  focal_ind <- focal_ind %>%
+    group_by(date) %>%
+    mutate(focal_next_UST = if_else(ID == focal_id, UST, NA))  %>%
+    fill(focal_next_UST, .direction = "up") 
+  
+  # adds column focal_matches. If the focal bird is the singer, it can't be a match (thus "NA"). 
+  # If the focal bird is not the singer, does the song type match focal's next song (within day). 
+  focal_ind <- focal_ind %>%
+    mutate(focal_matches = if_else(ID == focal_id, NA,
+                                   if_else(focal_next_UST == UST, 1, 0))) 
+  
+  # Coordinates for focal male and singing male
+  coords1 <- cbind(focal_ind$M1_Lat, focal_ind$M1_Lon)
+  coords2 <- cbind(focal_ind$Lat, focal_ind$Lon)
+  
+  # Distance matrix is a function of the two coordinate sets
+  dist_matrix <- distm(coords1, coords2, fun = distHaversine)
+  
+  # Take diagonal to estimate distances
+  focal_ind$dist_to_focal <- diag(dist_matrix)
+  
+  # Makes column "Focal_ID"
+  focal_ind$Focal_ID <- focal_id 
+  
+  # Makes column time_focals_last_song with the time of the focal's last song 
+  # NAs at the top of each day until the focal sings
+  focal_ind <- focal_ind %>%
+    group_by(date) %>%
+    mutate(time_focals_last_song = if_else(ID == focal_id, time_rel_sunrise, NA)) %>%
+    fill(time_focals_last_song, .direction = "down")  %>%
+    mutate(time_since_focals_last_song = time_rel_sunrise - time_focals_last_song) %>%
+    ungroup() %>%
+    # Makes "just_focal_time" column which contains the time of focal's songs
+    mutate(just_focal_time = ifelse(ID == focal_id , time_rel_sunrise, NA))
+  
+  # First groups by date AND UST (so code works within UST, within date), 
+  # then makes column "time_focals_last_rend_ST" which shows the time the focal last sang that ST.
+  # Fill that down (still within UST, within date) or else it just returns one value per focal song.
+  focal_ind <- focal_ind %>%
+    group_by(date, UST) %>%
+    mutate(time_focals_last_rend_ST = lag(just_focal_time)) %>%
+    fill(time_focals_last_rend_ST, .direction = "down")  %>%
+    mutate(time_since_focals_last_rend_ST = -1 * (time_focals_last_rend_ST - time_rel_sunrise))
+  
+  # Makes "lean" dataframe by selecting only the necessary variables, 
+  # then removing the focal's songs (which he cannot match) and ungrouping.
+  focal_ind_lean <- focal_ind %>%
+    select(index, Focal_ID, date, ID, time_rel_sunrise, UST, number_of_matches, 
+           does_it_match, focal_matches, dist_to_focal, time_since_focals_last_song, 
+           time_focals_last_rend_ST, time_since_focals_last_rend_ST, 
+           note_count:time_since_focals_last_rend_ST) %>%
+    filter(ID != focal_id) %>%
+    ungroup()
+  
+  # Save the lean dataframe to the list using a name like "LbOW_ind_lean"
+  output_name <- paste0(focal_id, "_ind_lean")
+  focal_outputs_c[[output_name]] <- focal_ind_lean
+}
+
+# You can now access the outputs like:
+# focal_outputs$LbOW_ind_lean
+# focal_outputs$TbTbLg_ind_lean
+OPR_ind_lean_c <- focal_outputs_c$OPR_ind_lean
+KLgK_ind_lean_c <- focal_outputs_c$KLgK_ind_lean
+KRDg_ind_lean_c <- focal_outputs_c$KRDg_ind_lean
+DgTbO_ind_lean_c <- focal_outputs_c$DgTbO_ind_lean
+TbWY_ind_lean_c <- focal_outputs_c$TbWY_ind_lean
+WLpTb_ind_lean_c <- focal_outputs_c$WLpTb_ind_lean
+```
+
+#6 Add neighbourhood column
+```{r}
+LbOW_ind_lean_n$neighbourhood <- "n"
+RbDgY_ind_lean_n$neighbourhood <- "n"
+YKY_ind_lean_n$neighbourhood <- "n"
+TbTbLg_ind_lean_n$neighbourhood <- "n"
+DgTbO_ind_lean_n$neighbourhood <- "n"
+RRO_ind_lean_n$neighbourhood <- "n"
+TbWY_ind_lean_c$neighbourhood <- "c"
+KRDg_ind_lean_c$neighbourhood <- "c"
+WLpTb_ind_lean_c$neighbourhood <- "c"
+KLgK_ind_lean_c$neighbourhood <- "c"
+DgTbO_ind_lean_c$neighbourhood <- "c"
+OPR_ind_lean_c$neighbourhood <- "c"
+
+### may want to cut OPR
+```
+
+#7 Merging data frames
+```{r} 
+# Make list of all dfs
+all_dfs <- list(LbOW_ind_lean_n, RbDgY_ind_lean_n, YKY_ind_lean_n, TbTbLg_ind_lean_n, DgTbO_ind_lean_n, RRO_ind_lean_n, TbWY_ind_lean_c, KRDg_ind_lean_c, WLpTb_ind_lean_c, KLgK_ind_lean_c, DgTbO_ind_lean_c, OPR_ind_lean_c)
+
+# Combine them into a single data frame
+ind_model_data <- bind_rows(all_dfs)
+```
+
+#7.5 relative performance
+```{r}
+# note_count, avg_note_gap_ratio_nl_s, avg_note_FM_nl_s, avg_silent_gap_FM_nl
+
+# Step 1: Ensure all key columns are character (to avoid type mismatch)
+ind_model_data <- ind_model_data %>%
+  mutate(
+    UST = as.character(UST),
+    ID = as.character(ID),
+    Focal_ID = as.character(Focal_ID)
+  )
+
+# Step 2: Compute group means: mean performance for each UST + ID combo
+avg_perf_table <- ind_model_data %>%
+  group_by(UST, ID) %>%
+  summarise(
+    focal_avg_note_count = mean(note_count, na.rm = TRUE),
+    focal_avg_note_gap_ratio_nl = mean(avg_note_gap_ratio_nl, na.rm = TRUE),
+    focal_avg_note_FM_nl = mean(avg_note_FM_nl, na.rm = TRUE),
+    focal_avg_gap_FM_nl = mean(avg_silent_gap_FM_nl, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 3: Join this back to the original df using UST and Focal_ID
+ind_model_data <- ind_model_data %>%
+  left_join(avg_perf_table, by = c("UST" = "UST", "Focal_ID" = "ID"))
+
+# Make relative performance variables (>0 means focal is better)
+ind_model_data <- ind_model_data %>%
+  mutate (rel_note_count = focal_avg_note_count - note_count)  %>%
+  mutate (rel_note_gap_ratio = focal_avg_note_gap_ratio_nl - avg_note_gap_ratio_nl)  %>%
+  mutate (rel_note_FM = focal_avg_note_FM_nl - avg_note_FM_nl)  %>%
+  mutate (rel_gap_FM = focal_avg_gap_FM_nl - avg_silent_gap_FM_nl)  
+
+
+```
+
+
+
+#8 Modifying merged dataset and getting means and sds
+```{r}
+#changing UST and index to factors
+ind_model_data$UST <- factor(ind_model_data$UST)
+ind_model_data$index <- factor(ind_model_data$index)
+ind_model_data$date <- factor(ind_model_data$date)
+
+# rename ID to neighbour_ID (not necessary for rvn.dat.clean.acoust(temp).csv)
+#ind_model_data <- ind_model_data  %>% 
+#  rename (neighbour_ID = ID)  %>%
+#  rename (focal_ID = Focal_ID)
+
+
+# Checking for outliers in perf differences
+hist(ind_model_data$rel_note_count, breaks = 100)
+hist(ind_model_data$rel_note_gap_ratio, breaks = 100)
+hist(ind_model_data$rel_note_FM, breaks = 100)
+hist(ind_model_data$rel_gap_FM, breaks = 100)
+
+# could cut outliers here, but I'm pounding it out for now
+#ind_model_data <- ind_model_data %>%
+ # filter(
+  #  rel_note_count < 1.7,
+   # rel_note_gap_ratio < 2.2,
+    #rel_gap_FM < 2
+  #)
+
+# scaling some variables
+ind_model_data$number_of_matches_s <- scale(ind_model_data$number_of_matches)
+ind_model_data$dist_to_focal_s <- scale(ind_model_data$dist_to_focal)
+ind_model_data$time_since_focals_last_song_s <- scale(ind_model_data$time_since_focals_last_song)
+ind_model_data$time_since_focals_last_rend_ST_s <- scale(ind_model_data$time_since_focals_last_rend_ST)
+ind_model_data$time_rel_sunrise_s <- 
+  scale(ind_model_data$time_rel_sunrise)
+ind_model_data$note_count_s <- 
+  scale(ind_model_data$note_count)
+ind_model_data$song_duration_s <- 
+  scale(ind_model_data$song_duration)
+ind_model_data$percent_sound_s <- 
+  scale(ind_model_data$percent_sound)
+ind_model_data$mean_freq_s <- 
+  scale(ind_model_data$mean_freq)
+ind_model_data$freq_BW_subtraction_s <- 
+  scale(ind_model_data$freq_BW_subtraction)
+ind_model_data$freq_BW_ratio_s <- 
+  scale(ind_model_data$freq_BW_ratio)
+ind_model_data$TR_unbiased_s <- 
+  scale(ind_model_data$TR_unbiased)
+#ind_model_data$consensus_dev_s <- 
+  #scale(ind_model_data$consensus_dev)
+ind_model_data$avg_note_gap_ratio_nl_s <- 
+  scale(ind_model_data$avg_note_gap_ratio_nl)
+ind_model_data$avg_note_FM_nl_s <- 
+  scale(ind_model_data$avg_note_FM_nl)
+ind_model_data$avg_silent_gap_FM_nl_s <- 
+  scale(ind_model_data$avg_silent_gap_FM_nl)
+
+ind_model_data$rel_note_count_s <- 
+  scale(ind_model_data$rel_note_count)
+ind_model_data$rel_note_gap_ratio_s <- 
+  scale(ind_model_data$rel_note_gap_ratio)
+ind_model_data$rel_note_FM_s <- 
+  scale(ind_model_data$rel_note_FM)
+ind_model_data$rel_gap_FM_s <- 
+  scale(ind_model_data$rel_gap_FM)
+
+
+
+#add Dyad column by concatenating neighbour and focal IDs
+ind_model_data$dyad <- paste0(ind_model_data$Focal_ID,"_", ind_model_data$ID)
+
+# getting mean and SD to backscale later
+sd_time_since_focals_last_song <- sd(ind_model_data$time_since_focals_last_song, na.rm = TRUE)
+avg_time_since_focals_last_song <- mean(ind_model_data$time_since_focals_last_song, na.rm = TRUE)
+
+sd_time_rel_sunrise <- sd(ind_model_data$time_rel_sunrise, na.rm = TRUE)
+avg_time_rel_sunrise <- mean(ind_model_data$time_rel_sunrise, na.rm = TRUE)
+
+sd_time_since_focals_last_rend_ST <- sd(ind_model_data$time_since_focals_last_rend_ST, na.rm = TRUE)
+avg_time_since_focals_last_rend_ST <- mean(ind_model_data$time_since_focals_last_rend_ST, na.rm = TRUE)
+
+sd_dist_to_focal <- sd(ind_model_data$dist_to_focal, na.rm = TRUE)
+avg_dist_to_focal <- mean(ind_model_data$dist_to_focal, na.rm = TRUE)
+
+sd_note_count <- sd(ind_model_data$note_count, na.rm = TRUE)
+avg_note_count <- mean(ind_model_data$note_count, na.rm = TRUE)
+
+sd_song_duration <- sd(ind_model_data$song_duration, na.rm = TRUE)
+avg_song_duration <- mean(ind_model_data$song_duration, na.rm = TRUE)
+
+sd_percent_sound <- sd(ind_model_data$percent_sound, na.rm = TRUE)
+avg_percent_sound <- mean(ind_model_data$percent_sound, na.rm = TRUE)
+
+sd_mean_freq <- sd(ind_model_data$mean_freq, na.rm = TRUE)
+avg_mean_freq <- mean(ind_model_data$mean_freq, na.rm = TRUE)
+
+sd_freq_BW_subtraction <- sd(ind_model_data$freq_BW_subtraction, na.rm = TRUE)
+avg_freq_BW_subtraction <- mean(ind_model_data$freq_BW_subtraction, na.rm = TRUE)
+
+sd_freq_BW_ratio <- sd(ind_model_data$freq_BW_ratio, na.rm = TRUE)
+avg_freq_BW_ratio <- mean(ind_model_data$freq_BW_ratio, na.rm = TRUE)
+
+sd_TR_unbiased <- sd(ind_model_data$TR_unbiased, na.rm = TRUE)
+avg_TR_unbiased <- mean(ind_model_data$TR_unbiased, na.rm = TRUE)
+
+#sd_consensus_dev <- sd(ind_model_data$consensus_dev, na.rm = TRUE)
+#avg_consensus_dev <- mean(ind_model_data$consensus_dev, na.rm = TRUE)
+
+sd_avg_note_gap_ratio_nl <- sd(ind_model_data$avg_note_gap_ratio_nl, na.rm = TRUE)
+avg_avg_note_gap_ratio_nl <- mean(ind_model_data$avg_note_gap_ratio_nl, na.rm = TRUE)
+
+sd_avg_note_FM_nl <- sd(ind_model_data$avg_note_FM_nl, na.rm = TRUE)
+avg_avg_note_FM_nl <- mean(ind_model_data$avg_note_FM_nl, na.rm = TRUE)
+
+sd_avg_silent_gap_FM_nl <- sd(ind_model_data$avg_silent_gap_FM_nl, na.rm = TRUE)
+avg_avg_silent_gap_FM_nl <- mean(ind_model_data$avg_silent_gap_FM_nl, na.rm = TRUE)
+
+
+
+sd_rel_note_count <- sd(ind_model_data$rel_note_count, na.rm = TRUE)
+avg_rel_note_count <- mean(ind_model_data$rel_note_count, na.rm = TRUE)
+
+sd_rel_note_gap_ratio <- sd(ind_model_data$rel_note_gap_ratio, na.rm = TRUE)
+avg_rel_note_gap_ratio <- mean(ind_model_data$rel_note_gap_ratio, na.rm = TRUE)
+
+sd_rel_note_FM <- sd(ind_model_data$rel_note_FM, na.rm = TRUE)
+avg_rel_note_FM <- mean(ind_model_data$rel_note_FM, na.rm = TRUE)
+
+sd_rel_gap_FM_s <- sd(ind_model_data$rel_gap_FM_s, na.rm = TRUE)
+avg_rel_gap_FM_s <- mean(ind_model_data$rel_gap_FM_s, na.rm = TRUE)
+
+```
+
+#11 Priors
+```{r}
+#Getting priors
+
+# Using note level relative  performance variables 
+# reduce dataset
+ind_model_data_min_2 <- select(ind_model_data, focal_matches, dist_to_focal_s, time_since_focals_last_rend_ST_s, time_since_focals_last_song_s, time_rel_sunrise_s, rel_note_count_s, rel_note_gap_ratio_s, rel_note_FM_s, rel_gap_FM_s, UST, index, Focal_ID, dyad, ID)
+
+# With univariate acoustic vars (replaced TR and BW w VD)
+get_prior_10 <- get_prior(focal_matches ~ dist_to_focal_s + time_since_focals_last_rend_ST_s +  s(time_rel_sunrise_s) + rel_note_count_s + rel_note_gap_ratio_s + rel_note_FM_s + rel_gap_FM_s + (1|UST) + (1|index) + (1|Focal_ID) + (1|dyad) + (1|ID), family="bernoulli", data = ind_model_data_min_2)
+
+get_prior_10[1,1] <- "normal(0,1)"
+
+```
+
+#12 The models
+```{r}
+
+# with note level performance variables
+# Univariate acoustics
+fit.matching.21 <- brm(focal_matches ~ dist_to_focal_s + time_since_focals_last_rend_ST_s +  s(time_rel_sunrise_s) + rel_note_count_s + rel_note_gap_ratio_s + rel_note_FM_s + rel_gap_FM_s + (1|UST) + (1|index) + (1|Focal_ID) + (1|dyad) + (1|ID), family="bernoulli", data = ind_model_data_min_2, control = list(adapt_delta = 0.95, max_treedepth = 10), iter = 4000, chains = 4, prior = get_prior_10, cores = 4)
+
+# 
+
+fit.matching.21
+save(fit.matching.21, file = "fit.matching.21.RData")
+
+#load(file = "fit.matching.21.RData")
+
+cond_r_squared.21 <- bayes_R2(fit.matching.21)
+
+cond_r_squared.21 
+ 
+
+#same w no rand effects
+marg_r_squared.21 <- bayes_R2(fit.matching.21, re_formula=NA)
+
+marg_r_squared.21 
+ 
+pp_check(fit.matching.21)
+```
+
+
+
+
