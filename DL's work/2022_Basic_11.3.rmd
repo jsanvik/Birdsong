@@ -1,0 +1,1298 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+### I should cut everything but the data importation and prep here, and move the other stuff (permutation tests, figures, etc) to different rmds ###
+
+#1 Loading Libraries
+```{r include=FALSE}
+# qdap requires 64-bit version of Java
+
+library(warbleR)
+library(Rraven)
+library(tidyverse)
+library(qdap)
+library(chron)
+library(hms)
+library(mapview)
+library(data.table)
+library(geodist)
+library(sf)
+library(RColorBrewer)
+library(igraph)
+# Show 100 columns in preview
+rstudioapi::writeRStudioPreference("data_viewer_max_columns", 100L)
+```
+
+#2 Loading Data
+```{r}
+rvn.dat <- imp_raven(all.data = TRUE, path = "./raven_data", warbler.format = TRUE)
+```
+
+#3 Cleaning
+```{r}
+# Editing out unnecessary columns
+# Fixing errors: sound.file entry incorrect for 20220509_LbLpY_ST1.wav and 20220519_KLgK_KV_1.WAV
+rvn.dat <- rvn.dat %>% 
+  subset(select = -c(View,Channel,ST2, ST3, Bird, Rec_Date)) %>% 
+  dplyr::mutate_if(is.character, stringr::str_replace_all, pattern = "LbLpY_ST1.wav", replacement = "20220509_LbLpY_KV_1.wav") %>%
+  dplyr::mutate_if(is.character, stringr::str_replace_all, pattern = "20220519__KLgK_KV_1.WAV", replacement = "20220519_KLgK_KV_1.WAV") 
+
+# splitting sound.files into multiple columns
+# Editing out unnecessary columns
+rvn.dat.clean <- rvn.dat %>% 
+  separate_wider_delim(sound.files,"_",names = c("date","ID","recordist","junk")) %>%
+  subset(select = -c(junk, Recordist)) 
+
+#add sound.files back because we need it to make selection tables later
+rvn.dat.clean$sound.files <- rvn.dat$sound.files
+
+# replace UBM(Dove) w name, but first have to get rid of parentheses
+rvn.dat.clean$ID <-  genX(rvn.dat.clean$ID, " (", ")")
+
+# Replace Dove w WLpTb
+# Clean up data_class column
+rvn.dat.clean <-  rvn.dat.clean %>%
+  mutate(across('ID', str_replace, 'UBM', 'WLpTb')) %>%
+  mutate(across('Data_Class', str_replace, 'End', 'end')) %>%
+  mutate(across('Data_Class', str_replace, 'comment.', 'comment')) %>%
+  mutate(across('Data_Class', str_replace, 'comments', 'comment'))
+
+#Selecting birds (to exclude OKO)
+birds_to_include <- c('KLgK', 'KWY', 'LbLpY', 'LpRbTb', 'DgTbO', 'LbOW', 'RRO', 'TbTbLg', 'YKY', 'RbDgY', 'KRDg', 'OPR','TbWY', 'WLpTb')
+
+rvn.dat.clean <- rvn.dat.clean %>%
+  filter(ID %in% birds_to_include)
+
+# cleaning up ST1 column
+rvn.dat.clean <- rvn.dat.clean %>%
+  mutate(across('ST1', str_replace, 'u', 'U'))
+  
+# separating songs and non-songs into two data frames
+rvn.dat.clean.songs <- filter(rvn.dat.clean, Data_Class == "song")
+rvn.dat.clean.not.songs <- filter (rvn.dat.clean, Data_Class != "song")
+
+# Old problem with NAs in YKY (see annotation in Basic_9.0 and earlier)
+
+# Cleaning songs dataframe
+# Here we correct for ST errors. More annotation in Basic_9.0 and earlier.
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$date == '20220518' & rvn.dat.clean.songs$ID == 'LbOW' & rvn.dat.clean.songs$selec == 209] <- "6"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$date == '20220513' & rvn.dat.clean.songs$ID == 'YKY' & rvn.dat.clean.songs$selec == 122] <- "20"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'Not in repertoire, skeptical'] <- "ID"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'note'] <- "u"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == '5*'] <- "5"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == '6*'] <- "6"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'Skeptical ID'] <- "ID"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'Unscoreable'] <- "U"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'Not in rep, skeptical'] <- "ID"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$ST1 == 'u'] <- "U"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$date == '20220510' & rvn.dat.clean.songs$ID == 'KLgK' & rvn.dat.clean.songs$selec == 43] <- "4"
+rvn.dat.clean.songs$ST1[rvn.dat.clean.songs$date == '20220513' & rvn.dat.clean.songs$ID == 'RRO' & rvn.dat.clean.songs$selec == 2] <- "17"
+
+#rejoining songs and not songs
+rvn.dat.clean <- rbind(rvn.dat.clean.songs,rvn.dat.clean.not.songs)
+
+#Fixing off bird
+rvn.dat.clean$Data_Class[rvn.dat.clean$Data_Class == 'off bird'] <- "off"
+
+# Omit "ID" songs
+rvn.dat.clean <- rvn.dat.clean %>%
+ filter(ST1 != ID | is.na(ST1))
+
+
+```
+
+#4 time "off bird" 1 (makes rows of data_class "begin_off" "end_off" and "off_bird_block")
+```{r}
+# Goal: Make off blocks
+
+# before join: rvn.dat.clean = 12471 obs, 15 var; off_bird_join = 109 obs, 5 var (none unique)
+# Import off_bird_join csv
+off_bird_join <- read.csv("off_bird/off_bird_join_4.csv")
+
+#convert dates to numeric 
+off_bird_join$date <- as.numeric(off_bird_join$date)
+rvn.dat.clean$date <- as.numeric(rvn.dat.clean$date)
+
+#full joining
+rvn.dat.clean <- full_join(rvn.dat.clean,off_bird_join)
+
+#that seemed to work! I now have entries under Data_Class = off_bird_block that describe the start and end time of the off blocks. Set max end to 5000 bc that's later than any real values (max ~ 4850)
+
+just_on_off <- filter(rvn.dat.clean, Data_Class == "off_bird_block")
+just_on_off
+
+# Making dfs for "begin_off" and "end_off" times and joining them to the main dataset
+# Setting up times for beginning of off blocks
+off_bird_starts <- off_bird_join %>% select(date,ID,start,Data_Class) 
+off_bird_starts <- off_bird_starts %>% mutate(Data_Class = str_replace(Data_Class, "off_bird_block", "begin_off"))
+rvn.dat.clean <- full_join(rvn.dat.clean,off_bird_starts)
+
+# Setting up times for end of off blocks
+off_bird_ends <- off_bird_join %>% select(date,ID,start = end,Data_Class) 
+off_bird_ends <- off_bird_ends %>% mutate(Data_Class = str_replace(Data_Class, "off_bird_block", "end_off"))
+rvn.dat.clean <- full_join(rvn.dat.clean,off_bird_ends)
+
+# Decided to make another chunk to make individual "off" columns. I put it after the time chunk so that "start" times are already converted to "time relative to sunrise"
+
+unique(rvn.dat.clean$Data_Class)
+```
+#5 Time
+```{r}
+# Goal: Add columns for click time (done), real time (done), sunrise time (done), time rel sunrise (done)
+
+#A look-up table using case_match to add clock time of click  
+rvn.dat.clean$click_clock <- case_match  (
+      rvn.dat.clean$date,
+      20220509	~ "05:14:00",
+      20220510	~ "05:10:10",
+      20220511 ~	"05:08:45",
+      20220512	~ "05:09:30",
+      20220513	~ "05:11:40",
+      20220514	~ "05:09:00",
+      20220516	~ "05:09:00",
+      20220517	~ "05:08:20",
+      20220518	~ "04:59:30",
+      20220519	~ "05:01:10",
+      20220520	~ "05:01:20",
+      20220521	~ "05:09:00",
+      20220523	~ "05:11:30",
+      20220524	~ "05:07:00"
+      )
+
+#making a DF with just click rows and checking recording times at moment of click 
+just_clicks <- filter(rvn.dat.clean, Data_Class == "click")
+
+# just_clicks
+click_rec <- select(just_clicks,"date","ID","start","end")
+click_rec
+
+#used this to look at click durations (time bt start and end of click). Where these varied within a day, I checked the orig recording and fixed the cursor placement on the click waveform, then saved and copied to "raven_data"
+click_rec_2 <- mutate(click_rec,click_dur = end - start)
+click_rec_2
+
+#reduced the variable set and renamed column to "click_rec" which is the recording time of the first click
+click_rec_3 <- select(click_rec_2, "date","ID", "start")
+click_rec_4 <- rename(click_rec_3, "click_rec" = "start")
+
+#left joining to add click_rec column to main dataset
+rvn.dat.clean <- left_join(rvn.dat.clean,click_rec_4)
+
+#turn start and click into hms class
+rvn.dat.clean$start_hms <- as_hms(rvn.dat.clean$start)
+
+rvn.dat.clean$click_clock_hms <- as_hms(rvn.dat.clean$click_clock)
+
+rvn.dat.clean$click_rec_hms <- as_hms(rvn.dat.clean$click_rec)
+
+#add start to click to arrive at time, then convert time to hms class. Note: changed variable "time" to "clock_time" for clarity in v7.2
+rvn.dat.clean$clock_time <- rvn.dat.clean$click_clock_hms + rvn.dat.clean$start_hms - rvn.dat.clean$click_rec_hms
+
+rvn.dat.clean$clock_time <- as_hms(rvn.dat.clean$clock_time)
+
+# Sunrise times
+# Tried some dedicated functions to get sunrise times, but none worked well, so I just looked it up on www.timeanddate.com
+
+rvn.dat.clean$sunrise <- case_match  (
+      rvn.dat.clean$date,
+      20220509	~ "05:58:00",
+      20220510	~ "05:57:30",
+      20220511 ~	"05:57:00",
+      20220512	~ "05:57:00",
+      20220513	~ "05:56:30",
+      20220514	~ "05:56:00",
+      20220516	~ "05:55:30",
+      20220517	~ "05:55:00",
+      20220518	~ "05:55:00",
+      20220519	~ "05:54:30",
+      20220520	~ "05:54:00",
+      20220521	~ "05:54:00",
+      20220523	~ "05:53:30",
+      20220524	~ "05:53:00"
+      )
+
+#change sunrise time to hms class
+rvn.dat.clean$sunrise <- as_hms(rvn.dat.clean$sunrise)
+
+#calculate time relative to sunrise
+rvn.dat.clean$time_rel_sunrise <-  rvn.dat.clean$clock_time - rvn.dat.clean$sunrise 
+
+```
+
+#6 Time "off bird" 2 (makes and populates "M#_Off" columns)
+```{r}
+#Make dates numeric
+rvn.dat.clean$date <- as.numeric(rvn.dat.clean$date)
+
+# Split into neighbourhoods
+# use %in% to "keep any of the following"
+rvn.dat.clean.south <- filter(rvn.dat.clean, date %in% c(20220509, 20220510, 20220511, 20220512))
+rvn.dat.clean.north <- filter(rvn.dat.clean, date %in% c(20220513, 20220514, 20220516, 20220517,20220518))
+rvn.dat.clean.centre <- filter(rvn.dat.clean, date %in% c(20220519, 20220520, 20220521, 20220523,20220524))
+
+# sort by date, time and group by date
+rvn.dat.clean.south <- rvn.dat.clean.south %>% arrange(date,start) %>% group_by(date)
+
+# if_else mutate to make and populate M#_Off columns based on begin_off and end_off values in Data_Class. "1" means that bird is not being observed at that time; 0 and NA mean that it is. Below I convert NA's to 0's. 
+rvn.dat.clean.south <- rvn.dat.clean.south %>% mutate(M1_Off = if_else(ID == "LbLpY" & Data_Class == "end_off", 0, 
+    if_else(ID == "LbLpY" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M1_Off)
+rvn.dat.clean.south <- rvn.dat.clean.south %>% mutate(M2_Off = if_else(ID == "KWY" & Data_Class == "end_off", 0, 
+    if_else(ID == "KWY" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M2_Off)
+rvn.dat.clean.south <- rvn.dat.clean.south %>% mutate(M3_Off = if_else(ID == "KLgK" & Data_Class == "end_off", 0, 
+    if_else(ID == "KLgK" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M3_Off)
+rvn.dat.clean.south <- rvn.dat.clean.south %>% mutate(M4_Off = if_else(ID == "LpRbTb" & Data_Class == "end_off", 0, 
+    if_else(ID == "LpRbTb" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M4_Off)
+
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M1_Off = if_else(ID == "LbOW" & Data_Class == "end_off", 0, 
+    if_else(ID == "LbOW" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M1_Off)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M2_Off = if_else(ID == "RbDgY" & Data_Class == "end_off", 0, 
+    if_else(ID == "RbDgY" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M2_Off)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M3_Off = if_else(ID == "YKY" & Data_Class == "end_off", 0, 
+    if_else(ID == "YKY" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M3_Off)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M4_Off = if_else(ID == "TbTbLg" & Data_Class == "end_off", 0, 
+    if_else(ID == "TbTbLg" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M4_Off)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M5_Off = if_else(ID == "DgTbO" & Data_Class == "end_off", 0, 
+    if_else(ID == "DgTbO" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M5_Off)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% mutate(M6_Off = if_else(ID == "RRO" & Data_Class == "end_off", 0, 
+    if_else(ID == "RRO" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M6_Off)
+
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M1_Off = if_else(ID == "TbWY" & Data_Class == "end_off", 0, 
+    if_else(ID == "TbWY" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M1_Off)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M2_Off = if_else(ID == "KRDg" & Data_Class == "end_off", 0, 
+    if_else(ID == "KRDg" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M2_Off)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M3_Off = if_else(ID == "OPR" & Data_Class == "end_off", 0, 
+    if_else(ID == "OPR" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M3_Off)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M4_Off = if_else(ID == "WLpTb" & Data_Class == "end_off", 0, 
+    if_else(ID == "WLpTb" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M4_Off)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M5_Off = if_else(ID == "KLgK" & Data_Class == "end_off", 0, 
+    if_else(ID == "KLgK" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M5_Off)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% mutate(M6_Off = if_else(ID == "DgTbO" & Data_Class == "end_off", 0, 
+    if_else(ID == "DgTbO" & Data_Class == "begin_off", 1,NA)))%>%
+    fill(M6_Off)
+
+ungroup(rvn.dat.clean.south)
+ungroup(rvn.dat.clean.north)
+ungroup(rvn.dat.clean.centre)
+
+rvn.dat.clean <- rbind(rvn.dat.clean.south,rvn.dat.clean.north,rvn.dat.clean.centre)
+
+# replace NA's with 0's in M#_Off columns
+rvn.dat.clean$M1_Off[is.na(rvn.dat.clean$M1_Off)] <- 0
+rvn.dat.clean$M2_Off[is.na(rvn.dat.clean$M2_Off)] <- 0
+rvn.dat.clean$M3_Off[is.na(rvn.dat.clean$M3_Off)] <- 0
+rvn.dat.clean$M4_Off[is.na(rvn.dat.clean$M4_Off)] <- 0
+rvn.dat.clean$M5_Off[is.na(rvn.dat.clean$M5_Off)] <- 0
+rvn.dat.clean$M6_Off[is.na(rvn.dat.clean$M6_Off)] <- 0
+```
+
+#7 Locations
+```{r}
+#Goal: cols for lat long (done)
+#finding odd location numbers. I looked up the whole list in Google Earth. Then attempted to figure out locations that were not in GE by looking at selection tables and maps
+
+#unique(rvn.dat.clean$Location_Number)
+
+# renaming locations with incorrect names. See Excel sheet "Lat_long_1" for details
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"005"	] <- 	"Y.005"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"007"	] <- 	"Y.007"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"HP_44"	] <- 	"044"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"JV_07"	] <- 	"Y.012"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"north road"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"parking lot"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"PS_09"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"037 or 38?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"038?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"37 or 038?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"37 or 38?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"37"	] <- 	"037"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"38 or 37"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"38?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"56?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Y.107"	] <- 	"Y.017"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Y_001"	] <- 	"Y.001"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Y001"	] <- 	"Y.001"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Bridge"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Brigde"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"none"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"O35"	] <- 	"035"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"O35?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"O36"	] <- 	"036"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"O37?"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Parkinglot"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"pre"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"RKDg (probably KRDg)"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"RKDg (probalby KRDg)"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"SH_001"	] <- 	"SH_01"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"SH_002"	] <- 	"SH_02"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"SH_005"	] <- 	"SH_05"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"TBD"	] <- 	"PS_01"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"the dove"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"u"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"unknown"	] <- 	""
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"YV_05"	] <- 	"KV_05"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"021"	] <- 	"SH_12"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"Y.002_UBM"	] <- 	"Y.002"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"HP_SS4"	] <- 	"HP_01"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"HP_SS5"	] <- 	"HP_02"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"HP_SS7"	] <- 	"HP_03"
+
+#Getting rid of leading zeros bc they're hard to deal with in the CSV
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"044"	] <- 	"44"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"008"	] <- 	"8"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"012"	] <- 	"12"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"016"	] <- 	"16"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"020"	] <- 	"20"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"022"	] <- 	"22"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"028"	] <- 	"28"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"029"	] <- 	"29"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"031"	] <- 	"31"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"032"	] <- 	"32"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"033"	] <- 	"33"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"034"	] <- 	"34"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"035"	] <- 	"35"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"036"	] <- 	"36"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"037"	] <- 	"37"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"038"	] <- 	"38"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"039"	] <- 	"39"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"041"	] <- 	"41"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"042"	] <- 	"42"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"043"	] <- 	"43"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"045"	] <- 	"45"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"046"	] <- 	"46"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"047"	] <- 	"47"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"048"	] <- 	"48"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"056"	] <- 	"56"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"057"	] <- 	"57"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"062"	] <- 	"62"
+
+# Renaming bad locations (having looked at maps and recognized these two don't make sense)
+# 9 instances of KR_09's in LpRbTb should be Y.009  = 17.978654, -67.164472
+# 1 instance of 016 in TbWY; should be Y.016 =  17.979760, -67.165867
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"KR_09"	] <- 	"Y.009"
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"16"	] <- 	"Y.016"
+
+#Pablo (in Twitter DM) said his 041 was a mistake, should have been 
+rvn.dat.clean$Location_Number[rvn.dat.clean$Location_Number == 	"41"	] <- 	"042"
+
+# Link Location_Number to Lat Longs
+# Lat_Lon_2_Join is a csv with the Location numbers and Lat Lons. In Excel, I had to format the cells to include 3 digits (under custom) for location names like 020. This doesn't seem to save (when I reopen the csv, it goes back to two digits), but it works anyway
+Lat_Lon_2_Join <- read.csv("location_data/Lat_Lon_2_Join.csv")
+rvn.dat.clean <- left_join(rvn.dat.clean,Lat_Lon_2_Join)
+
+unique(rvn.dat.clean$Location_Number)
+
+# Blank locations are NAs
+```
+
+#8 IID
+```{r}
+# Goal: columns of distance from each bird to other bird (using mutate)
+
+#Make dates numeric
+rvn.dat.clean$date <- as.numeric(rvn.dat.clean$date)
+
+# Split into neighbourhoods, then rejoin
+# use %in% to "keep any of the following" 
+rvn.dat.clean.south <- filter(rvn.dat.clean, date %in% c(20220509, 20220510, 20220511, 20220512))
+
+rvn.dat.clean.north <- filter(rvn.dat.clean, date %in% c(20220513, 20220514, 20220516, 20220517,20220518))
+
+rvn.dat.clean.centre <- filter(rvn.dat.clean, date %in% c(20220519, 20220520, 20220521, 20220523,20220524))
+
+# For each neighbourhood: Number males (done), sort by date then time (done), add columns of current location for each male, all IIDs, rbind to combine neighbourhoods and rename
+
+# South neighbourhood
+# 1. LbLpY, 2. KWY, 3. KLgK, 4. LpRbTb
+# arrange by  date, time 
+rvn.dat.clean.south <- rvn.dat.clean.south %>% 
+  arrange(date, time_rel_sunrise)
+
+#Set up Lat and Lon columns for each male. "Mutate" makes column and transfers appropriate lat / lon, "fill" fills down. group_by makes it start over for each date. 
+rvn.dat.clean.south <- rvn.dat.clean.south %>%
+  group_by(date) %>%
+  mutate(M1_Lat = if_else(ID == "LbLpY", Lat, NA))  %>%
+  fill(M1_Lat) %>%
+  mutate(M1_Lon = if_else(ID == "LbLpY", Lon, NA))  %>%
+  fill(M1_Lon) %>%
+
+  mutate(M2_Lat = if_else(ID == "KWY", Lat, NA))  %>%
+  fill(M2_Lat) %>%
+  mutate(M2_Lon = if_else(ID == "KWY", Lon, NA))  %>%
+  fill(M2_Lon) %>%
+
+  mutate(M3_Lat = if_else(ID == "KLgK", Lat, NA))  %>%
+  fill(M3_Lat) %>%
+  mutate(M3_Lon = if_else(ID == "KLgK", Lon, NA))  %>%
+  fill(M3_Lon) %>%
+
+  mutate(M4_Lat = if_else(ID == "LpRbTb", Lat, NA))  %>%
+  fill(M4_Lat) %>%
+  mutate(M4_Lon = if_else(ID == "LpRbTb", Lon, NA))  %>%
+  fill(M4_Lon)
+
+# North neighbourhood
+# 1. LbOW, 2. RbDgY, 3. YKY, 4. TbTbLg 5.DgTbO 6.RRO 
+# See explanation under South Neighbourhood
+
+rvn.dat.clean.north <- rvn.dat.clean.north %>%
+  arrange(date, time_rel_sunrise) %>%
+  
+  group_by(date) %>%
+  mutate(M1_Lat = if_else(ID == "LbOW", Lat, NA))  %>%
+  fill(M1_Lat) %>%
+  mutate(M1_Lon = if_else(ID == "LbOW", Lon, NA))  %>%
+  fill(M1_Lon) %>%
+
+  mutate(M2_Lat = if_else(ID == "RbDgY", Lat, NA))  %>%
+  fill(M2_Lat) %>%
+  mutate(M2_Lon = if_else(ID == "RbDgY", Lon, NA))  %>%
+  fill(M2_Lon) %>%
+
+  mutate(M3_Lat = if_else(ID == "YKY", Lat, NA))  %>%
+  fill(M3_Lat) %>%
+  mutate(M3_Lon = if_else(ID == "YKY", Lon, NA))  %>%
+  fill(M3_Lon) %>%
+
+  mutate(M4_Lat = if_else(ID == "TbTbLg", Lat, NA))  %>%
+  fill(M4_Lat) %>%
+  mutate(M4_Lon = if_else(ID == "TbTbLg", Lon, NA))  %>%
+  fill(M4_Lon)  %>%
+
+  mutate(M5_Lat = if_else(ID == "DgTbO", Lat, NA))  %>%
+  fill(M5_Lat) %>%
+  mutate(M5_Lon = if_else(ID == "DgTbO", Lon, NA))  %>%
+  fill(M5_Lon) %>%
+
+  mutate(M6_Lat = if_else(ID == "RRO", Lat, NA))  %>%
+  fill(M6_Lat) %>%
+  mutate(M6_Lon = if_else(ID == "RRO", Lon, NA))  %>%
+  fill(M6_Lon) 
+
+# Centre neighbourhood
+# 1. TbWY, 2. KRDg, 3. OPR, 4. WLpTb 5. KLgK 6. DgTbO
+
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>%
+  arrange(date, time_rel_sunrise) %>%
+  group_by(date) %>%
+  
+  mutate(M1_Lat = if_else(ID == "TbWY", Lat, NA))  %>%
+  fill(M1_Lat) %>%
+  mutate(M1_Lon = if_else(ID == "TbWY", Lon, NA))  %>%
+  fill(M1_Lon) %>%
+
+  mutate(M2_Lat = if_else(ID == "KRDg", Lat, NA))  %>%
+  fill(M2_Lat) %>%
+  mutate(M2_Lon = if_else(ID == "KRDg", Lon, NA))  %>%
+  fill(M2_Lon) %>%
+
+  mutate(M3_Lat = if_else(ID == "OPR", Lat, NA))  %>%
+  fill(M3_Lat) %>%
+  mutate(M3_Lon = if_else(ID == "OPR", Lon, NA))  %>%
+  fill(M3_Lon) %>%
+
+  mutate(M4_Lat = if_else(ID == "WLpTb", Lat, NA))  %>%
+  fill(M4_Lat) %>%
+  mutate(M4_Lon = if_else(ID == "WLpTb", Lon, NA))  %>%
+  fill(M4_Lon)  %>%
+
+  mutate(M5_Lat = if_else(ID == "KLgK", Lat, NA))  %>%
+  fill(M5_Lat) %>%
+  mutate(M5_Lon = if_else(ID == "KLgK", Lon, NA))  %>%
+  fill(M5_Lon) %>%
+
+  mutate(M6_Lat = if_else(ID == "DgTbO", Lat, NA))  %>%
+  fill(M6_Lat) %>%
+  mutate(M6_Lon = if_else(ID == "DgTbO", Lon, NA))  %>%
+  fill(M6_Lon) 
+
+# Also need to ungroup and merge. Not sure of best order of operations. Maybe 1. ungroup (done), 2 .merge (done), 3. IID columns
+
+ungroup(rvn.dat.clean.south)
+ungroup(rvn.dat.clean.north)
+ungroup(rvn.dat.clean.centre)
+
+rvn.dat.clean <- rbind(rvn.dat.clean.south,rvn.dat.clean.north,rvn.dat.clean.centre)
+
+# IIDs
+# First make data frames of each number-male's Lon / Lat
+M1_LL <- data.frame(x = rvn.dat.clean$M1_Lon, y = rvn.dat.clean$M1_Lat)
+M2_LL <- data.frame(x = rvn.dat.clean$M2_Lon, y = rvn.dat.clean$M2_Lat)
+M3_LL <- data.frame(x = rvn.dat.clean$M3_Lon, y = rvn.dat.clean$M3_Lat)
+M4_LL <- data.frame(x = rvn.dat.clean$M4_Lon, y = rvn.dat.clean$M4_Lat)
+M5_LL <- data.frame(x = rvn.dat.clean$M5_Lon, y = rvn.dat.clean$M5_Lat)
+M6_LL <- data.frame(x = rvn.dat.clean$M6_Lon, y = rvn.dat.clean$M6_Lat)
+
+# Pairwise IID calculations with geodist. Paired means it compares the two dfs, sequential means it compares one to one, rather than generating a matrix
+rvn.dat.clean$D_M1_M2 <- geodist (x = M1_LL, y = M2_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M1_M3 <- geodist (x = M1_LL, y = M3_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M1_M4 <- geodist (x = M1_LL, y = M4_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M1_M5 <- geodist (x = M1_LL, y = M5_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M1_M6 <- geodist (x = M1_LL, y = M6_LL, paired = TRUE, sequential = TRUE)
+
+rvn.dat.clean$D_M2_M3 <- geodist (x = M2_LL, y = M3_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M2_M4 <- geodist (x = M2_LL, y = M4_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M2_M5 <- geodist (x = M2_LL, y = M5_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M2_M6 <- geodist (x = M2_LL, y = M6_LL, paired = TRUE, sequential = TRUE)
+
+rvn.dat.clean$D_M3_M4 <- geodist (x = M3_LL, y = M4_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M3_M5 <- geodist (x = M3_LL, y = M5_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M3_M6 <- geodist (x = M3_LL, y = M6_LL, paired = TRUE, sequential = TRUE)
+
+rvn.dat.clean$D_M4_M5 <- geodist (x = M4_LL, y = M5_LL, paired = TRUE, sequential = TRUE)
+rvn.dat.clean$D_M4_M6 <- geodist (x = M4_LL, y = M6_LL, paired = TRUE, sequential = TRUE)
+
+rvn.dat.clean$D_M5_M6 <- geodist (x = M5_LL, y = M6_LL, paired = TRUE, sequential = TRUE)
+```
+
+#9 Universal song types
+```{r}
+
+#make column of IST (which is ID_ST) in rvn.dat.clean 
+rvn.dat.clean$IST <- str_c(rvn.dat.clean$ID, "_",rvn.dat.clean$ST1)
+
+#makes junk in non-song rows, but works fine. Might want to separate out neighbourhoods and types (songs only) in the future
+
+# "all_key" df comes from "matches_2.0_USTs.rmd". 
+# left join all_key to make UST
+
+all_key <- read.csv("st_matches/all_key.csv")
+rvn.dat.clean <- left_join(rvn.dat.clean, all_key)
+
+# spot checked USTs, looks good!
+```
+
+#10 matches based on USTs 
+```{r}
+# add columns for last UST by neighbour x 
+
+# Split into neighbourhoods, then rejoin
+# use %in% to "keep any of the following" per https://sebastiansauer.github.io/dplyr_filter/
+rvn.dat.clean.south <- filter(rvn.dat.clean, date %in% c(20220509, 20220510, 20220511, 20220512))
+rvn.dat.clean.north <- filter(rvn.dat.clean, date %in% c(20220513, 20220514, 20220516, 20220517,20220518))
+rvn.dat.clean.centre <- filter(rvn.dat.clean, date %in% c(20220519, 20220520, 20220521, 20220523,20220524))
+
+# arrange by  date, time 
+rvn.dat.clean.south <- rvn.dat.clean.south %>% 
+  arrange(date, time_rel_sunrise)
+rvn.dat.clean.north <- rvn.dat.clean.north %>% 
+  arrange(date, time_rel_sunrise)
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>% 
+  arrange(date, time_rel_sunrise)
+
+# Pipe train to make last_UST song columns
+# South neighbourhood
+# 1. LbLpY, 2. KWY, 3. KLgK, 4. LpRbTb
+rvn.dat.clean.south <- rvn.dat.clean.south %>%
+  group_by(date) %>%
+  
+  mutate(M1_last_UST = if_else(ID == "LbLpY", UST, NA))  %>%
+  fill(M1_last_UST) %>%
+
+  mutate(M2_last_UST = if_else(ID == "KWY", UST, NA))  %>%
+  fill(M2_last_UST) %>%
+
+  mutate(M3_last_UST = if_else(ID == "KLgK", UST, NA))  %>%
+  fill(M3_last_UST) %>%
+
+  mutate(M4_last_UST = if_else(ID == "LpRbTb", UST, NA))  %>%
+  fill(M4_last_UST) 
+
+# North neighbourhood
+# 1. LbOW, 2. RbDgY, 3. YKY, 4. TbTbLg 5.DgTbO 6.RRO 
+rvn.dat.clean.north <- rvn.dat.clean.north %>%
+  group_by(date) %>%
+  
+  mutate(M1_last_UST = if_else(ID == "LbOW", UST, NA))  %>%
+  fill(M1_last_UST) %>%
+
+  mutate(M2_last_UST = if_else(ID == "RbDgY", UST, NA))  %>%
+  fill(M2_last_UST) %>%
+
+  mutate(M3_last_UST = if_else(ID == "YKY", UST, NA))  %>%
+  fill(M3_last_UST) %>%
+
+  mutate(M4_last_UST = if_else(ID == "TbTbLg", UST, NA))  %>%
+  fill(M4_last_UST) %>%
+  
+  mutate(M5_last_UST = if_else(ID == "DgTbO", UST, NA))  %>%
+  fill(M5_last_UST) %>%
+
+  mutate(M6_last_UST = if_else(ID == "RRO", UST, NA))  %>%
+  fill(M6_last_UST) 
+
+# Centre neighbourhood
+# 1. TbWY, 2. KRDg, 3. OPR, 4. WLpTb 5. KLgK 6. DgTbO
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>%
+  group_by(date) %>%
+  
+  mutate(M1_last_UST = if_else(ID == "TbWY", UST, NA))  %>%
+  fill(M1_last_UST) %>%
+
+  mutate(M2_last_UST = if_else(ID == "KRDg", UST, NA))  %>%
+  fill(M2_last_UST) %>%
+
+  mutate(M3_last_UST = if_else(ID == "OPR", UST, NA))  %>%
+  fill(M3_last_UST) %>%
+
+  mutate(M4_last_UST = if_else(ID == "WLpTb", UST, NA))  %>%
+  fill(M4_last_UST) %>%
+
+  mutate(M5_last_UST = if_else(ID == "KLgK", UST, NA))  %>%
+  fill(M5_last_UST) %>%
+
+  mutate(M6_last_UST = if_else(ID == "DgTbO", UST, NA))  %>%
+  fill(M6_last_UST) 
+  
+# columns for matching each neighbour
+# first if_else tells it to ignore self, second tells it to register a 1 in M1_match if bird sings same UST as neighbour's last song
+# 1. LbLpY, 2. KWY, 3. KLgK, 4. LpRbTb
+rvn.dat.clean.south <- rvn.dat.clean.south %>%
+  mutate(M1_match = if_else(ID == "LbLpY", NA,
+  if_else(M1_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M2_match = if_else(ID == "KWY", NA,
+  if_else(M2_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M3_match = if_else(ID == "KLgK", NA,
+  if_else(M3_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M4_match = if_else(ID == "LpRbTb", NA,
+  if_else(M4_last_UST == UST, 1, NA)))
+
+# North neighbourhood
+# 1. LbOW, 2. RbDgY, 3. YKY, 4. TbTbLg, 5. DgTbO, 6. RRO 
+rvn.dat.clean.north <- rvn.dat.clean.north %>%
+  mutate(M1_match = if_else(ID == "LbOW", NA,
+  if_else(M1_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M2_match = if_else(ID == "RbDgY", NA,
+  if_else(M2_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M3_match = if_else(ID == "YKY", NA,
+  if_else(M3_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M4_match = if_else(ID == "TbTbLg", NA,
+  if_else(M4_last_UST == UST, 1, NA))) %>%
+
+  mutate(M5_match = if_else(ID == "DgTbO", NA,
+  if_else(M5_last_UST == UST, 1, NA))) %>%
+  
+  mutate(M6_match = if_else(ID == "RRO", NA,
+  if_else(M6_last_UST == UST, 1, NA))) 
+
+# Centre neighbourhood
+# 1. TbWY, 2. KRDg, 3. OPR, 4. WLpTb 5. KLgK 6. DgTbO
+rvn.dat.clean.centre <- rvn.dat.clean.centre %>%
+  mutate(M1_match = if_else(ID == "TbWY", NA,
+  if_else(M1_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M2_match = if_else(ID == "KRDg", NA,
+  if_else(M2_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M3_match = if_else(ID == "OPR", NA,
+  if_else(M3_last_UST == UST, 1, NA)))  %>%
+
+  mutate(M4_match = if_else(ID == "WLpTb", NA,
+  if_else(M4_last_UST == UST, 1, NA))) %>%
+
+  mutate(M5_match = if_else(ID == "KLgK", NA,
+  if_else(M5_last_UST == UST, 1, NA))) %>%
+  
+  mutate(M6_match = if_else(ID == "DgTbO", NA,
+  if_else(M6_last_UST == UST, 1, NA))) 
+
+# replace NAs with zeros 
+rvn.dat.clean.south$M1_match <- replace_na(rvn.dat.clean.south$M1_match, 0)
+rvn.dat.clean.south$M2_match <- replace_na(rvn.dat.clean.south$M2_match, 0)
+rvn.dat.clean.south$M3_match <- replace_na(rvn.dat.clean.south$M3_match, 0)
+rvn.dat.clean.south$M4_match <- replace_na(rvn.dat.clean.south$M4_match, 0)
+
+rvn.dat.clean.north$M1_match <- replace_na(rvn.dat.clean.north$M1_match, 0)
+rvn.dat.clean.north$M2_match <- replace_na(rvn.dat.clean.north$M2_match, 0)
+rvn.dat.clean.north$M3_match <- replace_na(rvn.dat.clean.north$M3_match, 0)
+rvn.dat.clean.north$M4_match <- replace_na(rvn.dat.clean.north$M4_match, 0)
+rvn.dat.clean.north$M5_match <- replace_na(rvn.dat.clean.north$M5_match, 0)
+rvn.dat.clean.north$M6_match <- replace_na(rvn.dat.clean.north$M6_match, 0)
+
+rvn.dat.clean.centre$M1_match <- replace_na(rvn.dat.clean.centre$M1_match, 0)
+rvn.dat.clean.centre$M2_match <- replace_na(rvn.dat.clean.centre$M2_match, 0)
+rvn.dat.clean.centre$M3_match <- replace_na(rvn.dat.clean.centre$M3_match, 0)
+rvn.dat.clean.centre$M4_match <- replace_na(rvn.dat.clean.centre$M4_match, 0)
+rvn.dat.clean.centre$M5_match <- replace_na(rvn.dat.clean.centre$M5_match, 0)
+rvn.dat.clean.centre$M6_match <- replace_na(rvn.dat.clean.centre$M6_match, 0)
+
+# ungroup
+rvn.dat.clean.south <- ungroup(rvn.dat.clean.south)
+rvn.dat.clean.north <- ungroup(rvn.dat.clean.north)
+rvn.dat.clean.centre <- ungroup(rvn.dat.clean.centre)
+
+# add neighbourhood column
+rvn.dat.clean.south$neighbourhood <- "south"
+rvn.dat.clean.north$neighbourhood <- "north"
+rvn.dat.clean.centre$neighbourhood <- "centre"
+
+# bind neighbourhoods
+rvn.dat.clean <- bind_rows (rvn.dat.clean.south, rvn.dat.clean.north, rvn.dat.clean.centre)
+```
+
+
+#11 Matching descriptive stats and summary columns, based on USTs
+```{r}
+# total matches per song (counts all songs that were matched, even if one song matches three others)
+# Variable called "number_of_matches"
+columns_to_sum <- c ("M1_match", "M2_match", "M3_match", "M4_match", "M5_match", "M6_match")
+rvn.dat.clean$number_of_matches <-  rowSums(rvn.dat.clean[columns_to_sum], na.rm = T)
+
+# Songs that match other songs (counts songs that match at least one other song, max = 1)
+# Variable called "does_it_match"
+rvn.dat.clean$does_it_match <-  if_else(rvn.dat.clean$number_of_matches>0,1,0)
+
+# total number of song matches (all days) based on number_of_matches
+all_song_matches <- sum(rvn.dat.clean$number_of_matches, na.rm = T)
+all_song_matches
+
+# total number of matching songs (all days) based on does_it_match
+all_matching_songs <- sum(rvn.dat.clean$does_it_match, na.rm = T)
+all_matching_songs
+
+#Match rate (proportion of songs that are matching songs) based on does_it_match
+rvn.dat.clean.songs <- filter(rvn.dat.clean, Data_Class == "song")
+match_rate <- all_matching_songs / NROW(rvn.dat.clean.songs$does_it_match)
+match_rate
+
+# Matching per male based on number_of_matches
+#South neighbourhood
+LbLpY_songs <- rvn.dat.clean %>% 
+  filter(ID == "LbLpY", Data_Class == "song") 
+LbLpY_num_matches <- sum(LbLpY_songs$number_of_matches)
+
+KLgK_songs_s <- rvn.dat.clean %>% 
+  filter(ID == "KLgK", Data_Class == "song", neighbourhood == "south") 
+KLgK_num_matches <- sum(KLgK_songs_s$number_of_matches)
+
+LpRbTb_songs <- rvn.dat.clean %>% 
+  filter(ID == "LpRbTb", Data_Class == "song") 
+LpRbTb_num_matches <- sum(LpRbTb_songs$number_of_matches)
+
+KWY_songs <- rvn.dat.clean %>% 
+  filter(ID == "KWY", Data_Class == "song") 
+KWY_num_matches <- sum(KWY_songs$number_of_matches)
+
+#North neighbourhood
+TbTbLg_songs <- rvn.dat.clean %>% 
+  filter(ID == "TbTbLg", Data_Class == "song") 
+TbTbLg_num_matches <- sum(TbTbLg_songs$number_of_matches)
+
+RbDgY_songs <- rvn.dat.clean %>% 
+  filter(ID == "RbDgY", Data_Class == "song") 
+RbDgY_num_matches <- sum(RbDgY_songs$number_of_matches)
+
+RRO_songs <- rvn.dat.clean %>% 
+  filter(ID == "RRO", Data_Class == "song") 
+RRO_num_matches <- sum(RRO_songs$number_of_matches)
+
+LbOW_songs <- rvn.dat.clean %>% 
+  filter(ID == "LbOW", Data_Class == "song") 
+LbOW_num_matches <- sum(LbOW_songs$number_of_matches)
+
+DgTbO_songs_n <- rvn.dat.clean %>% 
+  filter(ID == "DgTbO", Data_Class == "song", neighbourhood == "north") 
+DgTbO_num_matches <- sum(DgTbO_songs_n$number_of_matches)
+
+YKY_songs <- rvn.dat.clean %>% 
+  filter(ID == "YKY", Data_Class == "song") 
+YKY_num_matches <- sum(YKY_songs$number_of_matches)
+
+#Centre neighbourhood
+KLgK_songs_c <- rvn.dat.clean %>% 
+  filter(ID == "KLgK", Data_Class == "song", neighbourhood == "centre") 
+KLgK_num_matches <- sum(KLgK_songs_c$number_of_matches)
+
+WLpTb_songs <- rvn.dat.clean %>% 
+  filter(ID == "WLpTb", Data_Class == "song") 
+WLpTb_num_matches <- sum(WLpTb_songs$number_of_matches)
+
+TbWY_songs <- rvn.dat.clean %>% 
+  filter(ID == "TbWY", Data_Class == "song") 
+TbWY_num_matches <- sum(TbWY_songs$number_of_matches)
+
+KRDg_songs <- rvn.dat.clean %>% 
+  filter(ID == "KRDg", Data_Class == "song") 
+KRDg_num_matches <- sum(KRDg_songs$number_of_matches)
+
+OPR_songs <- rvn.dat.clean %>% 
+  filter(ID == "OPR", Data_Class == "song") 
+OPR_num_matches <- sum(OPR_songs$number_of_matches)
+
+DgTbO_songs_c <- rvn.dat.clean %>% 
+  filter(ID == "DgTbO", Data_Class == "song", neighbourhood == "centre") 
+DgTbO_num_matches <- sum(DgTbO_songs_c$number_of_matches)
+
+# Matching per male based on does_it_match 
+#South neighbourhood
+LbLpY_does_it_match <- sum(LbLpY_songs$does_it_match)
+KLgK_does_it_match_s <- sum(KLgK_songs_s$does_it_match)
+LpRbTb_does_it_match <- sum(LpRbTb_songs$does_it_match)
+KWY_does_it_match <- sum(KWY_songs$does_it_match)
+
+#North neighbourhood
+TbTbLg_does_it_match <- sum(TbTbLg_songs$does_it_match)
+RbDgY_does_it_match <- sum(RbDgY_songs$does_it_match)
+RRO_does_it_match <- sum(RRO_songs$does_it_match)
+LbOW_does_it_match <- sum(LbOW_songs$does_it_match)
+DgTbO_does_it_match_n <- sum(DgTbO_songs_n$does_it_match)
+YKY_does_it_match <- sum(YKY_songs$does_it_match)
+
+#Centre neighbourhood
+KLgK_does_it_match_c <- sum(KLgK_songs_c$does_it_match)
+WLpTb_does_it_match <- sum(WLpTb_songs$does_it_match)
+TbWY_does_it_match <- sum(TbWY_songs$does_it_match)
+KRDg_does_it_match <- sum(KRDg_songs$does_it_match)
+OPR_does_it_match <- sum(OPR_songs$does_it_match)
+DgTbO_does_it_match_c <- sum(DgTbO_songs_c$does_it_match)
+
+# times matched. this is the number of times another male matched the focal. It can count multiple matches for each song
+#Separate neighbourhoods
+rvn.dat.clean.south <- filter(rvn.dat.clean, date %in% c(20220509, 20220510, 20220511, 20220512))
+rvn.dat.clean.north <- filter(rvn.dat.clean, date %in% c(20220513, 20220514, 20220516, 20220517,20220518))
+rvn.dat.clean.centre <- filter(rvn.dat.clean, date %in% c(20220519, 20220520, 20220521, 20220523,20220524))
+
+# Sum of all matching songs in each neighbourhood
+all_matching_songs_north <- sum(rvn.dat.clean.north$does_it_match, na.rm = T)
+all_matching_songs_north
+
+all_matching_songs_centre <- sum(rvn.dat.clean.centre$does_it_match, na.rm = T)
+all_matching_songs_centre
+
+all_matching_songs_south <- sum(rvn.dat.clean.south$does_it_match, na.rm = T)
+all_matching_songs_south
+
+# Sum of all song matches in each neighbourhood (allows > 1 per focal song)
+all_song_matches_north <- sum(rvn.dat.clean.north$number_of_matches, na.rm = T)
+all_song_matches_north
+
+all_song_matches_centre <- sum(rvn.dat.clean.centre$number_of_matches, na.rm = T)
+all_song_matches_centre
+
+all_song_matches_south <- sum(rvn.dat.clean.south$number_of_matches, na.rm = T)
+all_song_matches_south
+
+#South
+# 1. LbLpY, 2. KWY, 3. KLgK, 4. LpRbTb
+LbLpY_times_matched_s <- sum(rvn.dat.clean.south$M1_match)
+KWY_times_matched_s <- sum(rvn.dat.clean.south$M2_match)
+KLgK_times_matched_s <- sum(rvn.dat.clean.south$M3_match)
+LpRbTb_times_matched_s <- sum(rvn.dat.clean.south$M4_match)
+
+# North neighbourhood
+# 1. LbOW, 2. RbDgY, 3. YKY, 4. TbTbLg, 5. DgTbO, 6. RRO 
+LbOW_times_matched_n <- sum(rvn.dat.clean.north$M1_match)
+RbDgY_times_matched_n <- sum(rvn.dat.clean.north$M2_match)
+YKY_times_matched_n <- sum(rvn.dat.clean.north$M3_match)
+TbTbLg_times_matched_n <- sum(rvn.dat.clean.north$M4_match)
+DgTbO_times_matched_n <- sum(rvn.dat.clean.north$M5_match)
+RRO_times_matched_n <- sum(rvn.dat.clean.north$M6_match)
+
+# Centre neighbourhood
+# 1. TbWY, 2. KRDg, 3. OPR, 4. WLpTb 5. KLgK 6. DgTbO
+TbWY_times_matched_c<- sum(rvn.dat.clean.centre$M1_match)
+KRDg_times_matched_c<- sum(rvn.dat.clean.centre$M2_match)
+OPR_times_matched_c<- sum(rvn.dat.clean.centre$M3_match)
+WLpTb_times_matched_c<- sum(rvn.dat.clean.centre$M4_match)
+KLgK_times_matched_c<- sum(rvn.dat.clean.centre$M5_match)
+DgTbO_times_matched_c<- sum(rvn.dat.clean.centre$M6_match)
+
+## I would also like to count songs matched based on does_it_match. These are the the songs by the focal male that were matched at least once. Each song by the focal contributes a maximum of 1 to this sum. 
+## This is harder to do!
+#make sure matches and matched are fully comparable
+```
+
+#12 Matching matrices and graphs (by neighbourhood)
+```{r}
+# North neighbourhood
+# 1. LbOW, 2. RbDgY, 3. YKY, 4. TbTbLg, 5. DgTbO, 6. RRO
+#convention is: focal(matcher)_matches_neighbour(matched)
+# summing matches by directed dyad
+LbOW_matches_LbOW <- sum(LbOW_songs$M1_match)
+LbOW_matches_RbDgy <- sum(LbOW_songs$M2_match)
+LbOW_matches_YKY <- sum(LbOW_songs$M3_match)
+LbOW_matches_TbTbLg <- sum(LbOW_songs$M4_match)
+LbOW_matches_DgTbO <- sum(LbOW_songs$M5_match)
+LbOW_matches_RRO <- sum(LbOW_songs$M6_match)
+
+RbDgY_matches_LbOW <- sum(RbDgY_songs$M1_match)
+RbDgY_matches_RbDgY <- sum(RbDgY_songs$M2_match)
+RbDgY_matches_YKY <- sum(RbDgY_songs$M3_match)
+RbDgY_matches_TbTbLg <- sum(RbDgY_songs$M4_match)
+RbDgY_matches_DgTbO <- sum(RbDgY_songs$M5_match)
+RbDgY_matches_RRO <- sum(RbDgY_songs$M6_match)
+
+YKY_matches_LbOW <- sum(YKY_songs$M1_match)
+YKY_matches_RbDgY <- sum(YKY_songs$M2_match)
+YKY_matches_YKY <- sum(YKY_songs$M3_match)
+YKY_matches_TbTbLg <- sum(YKY_songs$M4_match)
+YKY_matches_DgTbO <- sum(YKY_songs$M5_match)
+YKY_matches_RRO <- sum(YKY_songs$M6_match)
+
+TbTbLg_matches_LbOW <- sum(TbTbLg_songs$M1_match)
+TbTbLg_matches_RbDgY <- sum(TbTbLg_songs$M2_match)
+TbTbLg_matches_YKY <- sum(TbTbLg_songs$M3_match)
+TbTbLg_matches_TbTbLg <- sum(TbTbLg_songs$M4_match)
+TbTbLg_matches_DgTbO <- sum(TbTbLg_songs$M5_match)
+TbTbLg_matches_RRO <- sum(TbTbLg_songs$M6_match)
+
+DgTbO_matches_LbOW <- sum(DgTbO_songs_n$M1_match)
+DgTbO_matches_RbDgY <- sum(DgTbO_songs_n$M2_match)
+DgTbO_matches_YKY <- sum(DgTbO_songs_n$M3_match)
+DgTbO_matches_TbTbLg <- sum(DgTbO_songs_n$M4_match)
+DgTbO_matches_DgTbO_n <- sum(DgTbO_songs_n$M5_match)
+DgTbO_matches_RRO <- sum(DgTbO_songs_n$M6_match)
+
+RRO_matches_LbOW <- sum(RRO_songs$M1_match)
+RRO_matches_RbDgY <- sum(RRO_songs$M2_match)
+RRO_matches_YKY <- sum(RRO_songs$M3_match)
+RRO_matches_TbTbLg <- sum(RRO_songs$M4_match)
+RRO_matches_DgTbO <- sum(RRO_songs$M5_match)
+RRO_matches_RRO <- sum(RRO_songs$M6_match)
+
+# make matrix
+matching_n <- matrix(
+  c(LbOW_matches_LbOW, LbOW_matches_RbDgy, LbOW_matches_YKY, LbOW_matches_TbTbLg, LbOW_matches_DgTbO, LbOW_matches_RRO,
+    RbDgY_matches_LbOW, RbDgY_matches_RbDgY, RbDgY_matches_YKY, RbDgY_matches_TbTbLg, RbDgY_matches_DgTbO, RbDgY_matches_RRO, 
+    YKY_matches_LbOW, YKY_matches_RbDgY, YKY_matches_YKY, YKY_matches_TbTbLg, YKY_matches_DgTbO, YKY_matches_RRO,
+    TbTbLg_matches_LbOW, TbTbLg_matches_RbDgY, TbTbLg_matches_YKY, TbTbLg_matches_TbTbLg, TbTbLg_matches_DgTbO, TbTbLg_matches_RRO,
+    DgTbO_matches_LbOW, DgTbO_matches_RbDgY, DgTbO_matches_YKY, DgTbO_matches_TbTbLg, DgTbO_matches_DgTbO_n, DgTbO_matches_RRO, 
+    RRO_matches_LbOW, RRO_matches_RbDgY, RRO_matches_YKY, RRO_matches_TbTbLg, RRO_matches_DgTbO, RRO_matches_RRO
+    ), 
+  nrow = 6,
+  ncol = 6, 
+  byrow = TRUE
+)
+
+rownames(matching_n) = c("LbOW", "RbDgY", "YKY", "TbTbLg", "DgTbO", "RRO")
+colnames(matching_n) = c("LbOW", "RbDgY", "YKY", "TbTbLg", "DgTbO", "RRO")
+
+matching_n
+
+# Graph
+matching_n_graph <- graph_from_adjacency_matrix(matching_n, mode = "directed", weighted = TRUE)
+
+plot(matching_n_graph, edge.width = E(matching_n_graph)$weight/10)
+
+# Centre neighbourhood
+# 1. TbWY, 2. KRDg, 3. OPR, 4. WLpTb 5. KLgK 6. DgTbO
+
+TbWY_matches_TbWY <- sum(TbWY_songs$M1_match)
+TbWY_matches_KRDg <- sum(TbWY_songs$M2_match)
+TbWY_matches_OPR <- sum(TbWY_songs$M3_match)
+TbWY_matches_WLpTb <- sum(TbWY_songs$M4_match)
+TbWY_matches_KLgK <- sum(TbWY_songs$M5_match)
+TbWY_matches_DgTbO <- sum(TbWY_songs$M6_match)
+
+KRDg_matches_TbWY <- sum(KRDg_songs$M1_match)
+KRDg_matches_KRDg <- sum(KRDg_songs$M2_match)
+KRDg_matches_OPR <- sum(KRDg_songs$M3_match)
+KRDg_matches_WLpTb <- sum(KRDg_songs$M4_match)
+KRDg_matches_KLgK <- sum(KRDg_songs$M5_match)
+KRDg_matches_DgTbO <- sum(KRDg_songs$M6_match)
+
+OPR_matches_TbWY <- sum(OPR_songs$M1_match)
+OPR_matches_KRDg <- sum(OPR_songs$M2_match)
+OPR_matches_OPR <- sum(OPR_songs$M3_match)
+OPR_matches_WLpTb <- sum(OPR_songs$M4_match)
+OPR_matches_KLgK <- sum(OPR_songs$M5_match)
+OPR_matches_DgTbO <- sum(OPR_songs$M6_match)
+
+WLpTb_matches_TbWY <- sum(WLpTb_songs$M1_match)
+WLpTb_matches_KRDg <- sum(WLpTb_songs$M2_match)
+WLpTb_matches_OPR <- sum(WLpTb_songs$M3_match)
+WLpTb_matches_WLpTb <- sum(WLpTb_songs$M4_match)
+WLpTb_matches_KLgK <- sum(WLpTb_songs$M5_match)
+WLpTb_matches_DgTbO <- sum(WLpTb_songs$M6_match)
+
+KLgK_matches_TbWY <- sum(KLgK_songs_c$M1_match)
+KLgK_matches_KRDg <- sum(KLgK_songs_c$M2_match)
+KLgK_matches_OPR <- sum(KLgK_songs_c$M3_match)
+KLgK_matches_WLpTb <- sum(KLgK_songs_c$M4_match)
+KLgK_matches_KLgK_c <- sum(KLgK_songs_c$M5_match)
+KLgK_matches_DgTbO <- sum(KLgK_songs_c$M6_match)
+
+DgTbO_matches_TbWY <- sum(DgTbO_songs_c$M1_match)
+DgTbO_matches_KRDg <- sum(DgTbO_songs_c$M2_match)
+DgTbO_matches_OPR <- sum(DgTbO_songs_c$M3_match)
+DgTbO_matches_WLpTb <- sum(DgTbO_songs_c$M4_match)
+DgTbO_matches_KLgK <- sum(DgTbO_songs_c$M5_match)
+DgTbO_matches_DgTbO_c <- sum(DgTbO_songs_c$M6_match)
+
+# make matrix
+matching_c <- matrix(
+  c(TbWY_matches_TbWY,TbWY_matches_KRDg, TbWY_matches_OPR, 
+TbWY_matches_WLpTb, TbWY_matches_KLgK, TbWY_matches_DgTbO, 
+
+KRDg_matches_TbWY, KRDg_matches_KRDg, KRDg_matches_OPR, KRDg_matches_WLpTb, KRDg_matches_KLgK, KRDg_matches_DgTbO, 
+
+OPR_matches_TbWY, OPR_matches_KRDg, OPR_matches_OPR, OPR_matches_WLpTb, OPR_matches_KLgK, OPR_matches_DgTbO, 
+
+WLpTb_matches_TbWY, WLpTb_matches_KRDg, WLpTb_matches_OPR, WLpTb_matches_WLpTb, WLpTb_matches_KLgK, WLpTb_matches_DgTbO, 
+
+KLgK_matches_TbWY, KLgK_matches_KRDg, KLgK_matches_OPR, KLgK_matches_WLpTb, KLgK_matches_KLgK_c, KLgK_matches_DgTbO, 
+
+DgTbO_matches_TbWY, DgTbO_matches_KRDg, DgTbO_matches_OPR, DgTbO_matches_WLpTb, DgTbO_matches_KLgK, DgTbO_matches_DgTbO_c), 
+  nrow = 6,
+  ncol = 6, 
+  byrow = TRUE
+)
+
+rownames(matching_c) = c("TbWY", "KRDg", "OPR", "WLpTb", "KLgK", "DgTbO")
+colnames(matching_c) = c("TbWY", "KRDg", "OPR", "WLpTb", "KLgK", "DgTbO")
+
+matching_c
+
+# Graph
+matching_c_graph <- graph_from_adjacency_matrix(matching_c, mode = "directed", weighted = TRUE)
+
+plot(matching_c_graph, edge.width = E(matching_c_graph)$weight/10)
+
+
+#South
+# 1. LbLpY, 2. KWY, 3. KLgK, 4. LpRbTb
+LbLpY_matches_LbLpY <- sum(LbLpY_songs$M1_match)
+LbLpY_matches_KWY <- sum(LbLpY_songs$M2_match)
+LbLpY_matches_KLgK <- sum(LbLpY_songs$M3_match)
+LbLpY_matches_LpRbTb <- sum(LbLpY_songs$M4_match)
+
+KWY_matches_LbLpY <- sum(KWY_songs$M1_match)
+KWY_matches_KWY <- sum(KWY_songs$M2_match)
+KWY_matches_KLgK <- sum(KWY_songs$M3_match)
+KWY_matches_LpRbTb <- sum(KWY_songs$M4_match)
+
+KLgK_matches_LbLpY <- sum(KLgK_songs_s$M1_match)
+KLgK_matches_KWY <- sum(KLgK_songs_s$M2_match)
+KLgK_matches_KLgK_s <- sum(KLgK_songs_s$M3_match)
+KLgK_matches_LpRbTb <- sum(KLgK_songs_s$M4_match)
+
+LpRbTb_matches_LbLpY <- sum(LpRbTb_songs$M1_match)
+LpRbTb_matches_KWY <- sum(LpRbTb_songs$M2_match)
+LpRbTb_matches_KLgK <- sum(LpRbTb_songs$M3_match)
+LpRbTb_matches_LpRbTb <- sum(LpRbTb_songs$M4_match)
+
+
+matching_s <- matrix(
+  c(
+    LbLpY_matches_LbLpY, LbLpY_matches_KWY, LbLpY_matches_KLgK, 
+LbLpY_matches_LpRbTb, 
+
+KWY_matches_LbLpY, KWY_matches_KWY, KWY_matches_KLgK, KWY_matches_LpRbTb, 
+
+KLgK_matches_LbLpY, KLgK_matches_KWY,KLgK_matches_KLgK_s, KLgK_matches_LpRbTb, 
+
+LpRbTb_matches_LbLpY, LpRbTb_matches_KWY, LpRbTb_matches_KLgK, LpRbTb_matches_LpRbTb), 
+  nrow = 4,
+  ncol = 4, 
+  byrow = TRUE
+)
+
+rownames(matching_s) = c("LbLpY", "KWY", "KLgK", "LpRbTb")
+colnames(matching_s) = c("LbLpY", "KWY", "KLgK", "LpRbTb")
+
+matching_s
+
+# Graph
+matching_s_graph <- graph_from_adjacency_matrix(matching_s, mode = "directed", weighted = TRUE)
+
+plot(matching_s_graph, edge.width = E(matching_s_graph)$weight/10)
+```
+
+#13 Add song end time
+```{r}
+rvn.dat.clean$song_end_time <- rvn.dat.clean$time_rel_sunrise + (rvn.dat.clean$end - rvn.dat.clean$start)
+```
+
+#14 define DC
+```{r}
+# make variables date, DateTime in POSIXct format, and Bird_Date
+rvn.dat.clean.1 <- rvn.dat.clean %>%
+    mutate(
+    date = as.Date(as.character(date), format = "%Y%m%d"), 
+    DateTime = as.POSIXct(paste(date, clock_time), format = "%Y-%m-%d %H:%M:%S"),
+  # Add unique bird recording as a column
+    Bird_Date = paste(ID, date, sep = "_")) 
+
+# separating songs and non-songs into two data frames
+rvn.dat.clean.1.songs <- filter(rvn.dat.clean.1, Data_Class == "song")
+rvn.dat.clean.1.not.songs <- filter (rvn.dat.clean.1, Data_Class != "song")
+
+# arrange rvn.dat.clean.1.songs by time within ID and date, add columns for Time_Diff and RepeatST, change name of df to DD
+DD <- rvn.dat.clean.1.songs %>%
+  arrange(Bird_Date, DateTime) %>% # Ensure rows are ordered by time within each group
+   group_by(Bird_Date) %>%
+ mutate(
+    # Calculate time difference between consecutive rows
+    Time_Diff = as.numeric(difftime(DateTime, lag(DateTime, default = first(DateTime)), units = "secs")), 
+    # Check if Song.Type is the same as the previous row
+    RepeatST = ifelse(is.na(UST) | is.na(lag(UST)), FALSE, UST == lag(UST)) #sometimes UST is NA, that makes the current and following row for repeat ST NA
+  ) 
+
+
+# Make list of unique bird_dates 
+recordings <- unique(DD$Bird_Date)
+
+# Parameters
+T <- 1000  # Lag threshold in seconds
+Tseq <- 2 # Consecutive occurrences of lag >= T required to initiate cutoff
+R <- 7   # Number of consecutive TRUE values required in RepeatST
+S <- 40   # Start (excludes the first S songs for DC consideration)
+
+# adds a lag threshold cutoff to data frame
+DD <- DD %>% 
+  mutate(Time_Diff = as.numeric(Time_Diff),
+         GreaterThanT = Time_Diff >= T)
+
+DD$Repeat_ST_Run <- with(DD, {
+  run_id <- cumsum(!RepeatST)  # Create groups that reset on FALSE
+  sequence <- ave(RepeatST, run_id, FUN = function(x) ifelse(x, seq_along(x)-1, 0))
+  sequence +1
+})
+
+#Add Long_Latency_Run column for cumulative latencies > T
+DD$Long_Latency_Run <- with(DD, {
+  run_id <- cumsum(!GreaterThanT)  # Create groups that reset on FALSE
+  sequence <- ave(GreaterThanT, run_id, FUN = function(x) ifelse(x, seq_along(x)-1, 0))
+  sequence
+})
+ 
+# columns that say whether a row meets the latency and repetition meet the threshold, a column that says whether it meets either threshold
+
+DD <- DD %>%
+  mutate(meets_lat_thresh = if_else(Long_Latency_Run >= Tseq ,1,0)) %>%
+  mutate(meets_rep_thresh = if_else(Repeat_ST_Run >= R ,1,0)) %>%
+  mutate(meets_either_thresh = if_else(row_number()<=S,0, if_else(meets_rep_thresh + meets_lat_thresh >= 1,1,0)))
+
+  
+# Column "Phase" shows DC or PDC
+
+
+DD <- DD %>%
+  group_by(Bird_Date) %>%
+  mutate(
+    Phase = {
+      first_thresh_index <- which(meets_either_thresh == 1)
+      if (length(first_thresh_index) == 0) {
+        rep("DC", n())
+      } else {
+        switch_point <- min(first_thresh_index) - R +1
+        if_else(row_number() < switch_point, "DC", "PDC")
+      }
+    }
+  ) %>%
+  ungroup()
+
+# Column End_DC to mark end of DC
+DD <- DD %>%
+  group_by(Bird_Date) %>%
+  mutate(
+    End_DC = if_else(Phase == "PDC" & lag(Phase, default = "DC") == "DC", 1, 0)
+  ) %>%
+  ungroup()
+
+###  ###
+
+test_set <- DD %>%
+  filter(Bird_Date == "RRO_2022-05-16")
+
+all_bird_dates <- unique(DD$Bird_Date)
+
+```
+
+#15 visualize DC cutoffs
+```{r, warning=FALSE}
+
+# Get unique Bird_Date combinations
+bird_date_combinations <- unique(DD$Bird_Date)
+
+# Initialize a list to store plots
+p <- list()
+
+# Loop over each Bird_Date combination
+for (i in seq_along(bird_date_combinations)) {
+  # Subset data for the current Bird_Date
+  subset <- DD %>% filter(Bird_Date == bird_date_combinations[i])
+  
+  # Identify DateTime values where End_DC == 1
+  end_dc_times <- subset %>% filter(End_DC == 1) %>% pull(DateTime)
+  
+  # Create the plot
+  p[[i]] <- ggplot(subset, aes(x = DateTime, y = Time_Diff)) +
+    geom_line(size = 1, color = "black") +  # Single black line for Time_Diff
+    geom_point(aes(color = as.factor(RepeatST)), size = 2) +  # Color points based on RepeatST
+    labs(
+      title = paste("Line Graph for Bird_Date", bird_date_combinations[i]),
+      x = "Time of Observation",
+      y = "Song Latency (seconds)",
+      color = "RepeatST"
+    ) +
+    scale_color_manual(values = c("TRUE" = "blue", "FALSE" = "orange")) + # Custom colors for TRUE/FALSE
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      strip.text = element_text(size = 10)
+    ) +
+    # Add vertical red dotted lines where End_DC == 1 (pounded out bc red lines aren't in the right places)
+    geom_vline(
+  data = subset %>% filter(End_DC == 1),
+  aes(xintercept = as.numeric(DateTime)),
+  linetype = "dotted",
+  color = "red",
+  size = 1
+)
+  
+  # Save the plot
+  ggsave(
+    filename = paste0("Figures/DC_Cutoff/", bird_date_combinations[i], ".jpeg"),
+    plot = p[[i]],
+    width = 400,
+    height = 200,
+    units = "mm",
+    dpi = 300
+  )
+}
+
+```
+
+# 16 reunite songs and non-songs and sort
+```{r}
+
+rvn.dat.clean.2 <- bind_rows(DD, rvn.dat.clean.1.not.songs)
+
+rvn.dat.clean.2 <- rvn.dat.clean.2 %>%
+  arrange(Bird_Date, DateTime)
+
+```
+
+#17 export dataframe
+```{r}
+write.csv(rvn.dat.clean.2, "rvn.dat.clean.csv", row.names = FALSE)
+```
+
+
