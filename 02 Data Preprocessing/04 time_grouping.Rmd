@@ -1,0 +1,33 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+  Data Preprocessing/04 time_grouping.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+library(tidyverse)
+data <- read_csv("data/minizord.csv")
+```
+
+```{r}
+TIME_INTERVAL <- "30 seconds"
+
+time_data <- data %>%
+    mutate(interval = floor_date(DateTime, unit=TIME_INTERVAL)) %>%
+    group_by(interval) %>%
+    summarise(
+        # Distance
+        across(where((is.numeric)), ~mean(.x, na.rm=FALSE))
+        # Match Values
+    )
+
+time_data
+```
+
+```{r}
+time_data
+```
+

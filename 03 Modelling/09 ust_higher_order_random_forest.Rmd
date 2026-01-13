@@ -1,0 +1,225 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\03
+  Modelling/09 ust_higher_order_random_forest.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+Import Packages
+
+```{r}
+# install.packages("tidymodels")
+# install.packages('rlang')
+# install.packages("ranger")
+# install.packages("rpart.plot")
+# install.packages("vip")
+library(tidyverse)
+library(tidymodels)
+library(rpart.plot) # for plotting decision tree
+library(vip) # for ranking feature importance
+# library(ranger) # engine for random forest
+
+# set random seed
+set.seed(42)
+```
+
+Load data
+
+```{r}
+data <- read_csv("data/matching_opportunities.csv")
+```
+
+```{r}
+# In data (training AND testing), how many of each song type for the focal male?
+n_ust <- data %>%
+    group_by(UST) %>%
+    summarize(n = n()) %>%
+    mutate(percent = 100*n/nrow(data)) %>%
+    arrange(desc(percent))
+n_ust
+```
+
+```{r}
+# Model Inputs
+model_columns <- c(
+        "UST", 
+        # "does_it_match",
+        # "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6",
+        # "M1_last_UST", "M2_last_UST", "M3_last_UST", "M4_last_UST", "M5_last_UST", "M6_last_UST", # TODO: These are categorical variables, how does this implementation of knn handle those?
+        "M1_1_last_UST", "M2_1_last_UST", "M3_1_last_UST", "M4_1_last_UST", "M5_1_last_UST", "M6_1_last_UST", 
+        "M1_2_last_UST", "M2_2_last_UST", "M3_2_last_UST", "M4_2_last_UST", "M5_2_last_UST", "M6_2_last_UST", 
+        # "time_M1_last_song", "time_M2_last_song", "time_M3_last_song", "time_M4_last_song", "time_M5_last_song", "time_M6_last_song",
+    	"time_since_M1_1_last_song", "time_since_M2_1_last_song", "time_since_M3_1_last_song", "time_since_M4_1_last_song", "time_since_M5_1_last_song", "time_since_M6_1_last_song",
+    	"time_since_M1_2_last_song", "time_since_M2_2_last_song", "time_since_M3_2_last_song", "time_since_M4_2_last_song", "time_since_M5_2_last_song", "time_since_M6_2_last_song",
+        "time_rel_sunrise"
+    )
+```
+
+```{r}
+# Set data types and select input columns
+data <- data %>% 
+    mutate(across(contains("UST"), ~ as.factor(.x)), 
+        does_it_match = as.factor(does_it_match),
+        number_of_matches = as.integer(number_of_matches)) %>%
+    select(model_columns)  %>%
+    drop_na() # drop any row containing at least one NA value
+```
+
+```{r}
+glimpse(data)
+```
+
+```{r}
+
+# train test split
+train_test_split <- initial_split(data, prop = 0.7, strata=UST)
+
+train_data <- train_test_split %>% training()
+test_data <- train_test_split %>% testing()
+
+# In training data, how many of each song type?
+n_ust <- train_data %>%
+    group_by(UST) %>%
+    summarize(n = n()) %>%
+    mutate(percent = 100*n/nrow(train_data)) %>%
+    arrange(percent)
+n_ust
+
+# use v-fold cross validation to assess model accuracy
+v <- 5
+train_vfold <- vfold_cv(train_data, v=v, strata = UST)
+```
+
+```{r}
+# Data preprocessing using a recipe
+recipe <- recipe(UST ~ ., data = train_data) %>%
+    step_scale(all_numeric()) %>% # scale all numeric predictors
+    step_center(all_numeric()) # center all numeric predictors
+```
+
+```{r}
+# Create model specification
+model_tuning_spec <- rand_forest(mtry = tune(), trees = 1000, min_n=tune()) %>%
+    set_engine("ranger", importance = "impurity") %>% # importance = impurity measures feature importance (using gini impurity reduction), used for vip() later
+    set_mode("classification")
+```
+
+```{r}
+tune_grid <- tidyr::crossing(
+    mtry = c(4, 8, 12, 16, 20), # The number of variables randomly sampled as candidates at each split
+    min_n = c(2, 5, 10, 15, 20) # Minimum number of data points in a node required for a split
+)
+eval_metrics <- metric_set(accuracy, precision, recall)
+
+model_tuning <- workflow() %>%
+    add_recipe(recipe) %>%
+    add_model(model_tuning_spec) %>%
+
+        tune_grid(resamples = train_vfold, grid=tune_grid, metrics = eval_metrics) # for v-fold cross validation, tuning k parameter
+        # fit(data = train_data) # to train on whole train set with no validation set
+
+model_tuning
+```
+
+```{r}
+# Accuracies listed use 5-fold cross validation 2025-10-17
+model_tuning_accuracies <- model_tuning %>% collect_metrics() %>% arrange(.metric) #  %>% filter(.metric == "accuracy")
+model_tuning_accuracies
+```
+
+```{r}
+# plot accuracies of all values of hyperparameters
+
+ggplot(model_tuning_accuracies %>% filter(.metric == "accuracy")) +
+    geom_tile(aes(x=mtry, y=min_n, fill=mean)) +
+    geom_text(aes(x=mtry, y=min_n, label=round(mean, 2), size=5)) +
+    labs(x = "Randomly Sampled Variables", y = "Minimum Samples to Split", color="Estimated Accuracy", title="Accuracy") +
+    theme(text = element_text(size=20)) +
+    scale_fill_gradient(low="white", high="red")
+
+# Print best hyperparameter values
+best_params <- model_tuning_accuracies %>% arrange(desc(mean)) %>% head(1) %>% pull(mtry, min_n)
+print("Best hyperparameters: (mtry, min_n)")
+print(best_params)
+```
+
+```{r}
+# plot accuracies of all values of hyperparameters
+
+ggplot(model_tuning_accuracies %>% filter(.metric == "recall")) +
+    geom_tile(aes(x=mtry, y=min_n, fill=mean)) +
+    geom_text(aes(x=mtry, y=min_n, label=round(mean, 2), size=5)) +
+    labs(x = "Randomly Sampled Variables", y = "Minimum Samples to Split", color="Estimated Recall", title="Recall") +
+    theme(text = element_text(size=20)) +
+    scale_fill_gradient(low="white", high="red")
+
+# Print best hyperparameter values
+best_params <- model_tuning_accuracies %>% arrange(desc(mean)) %>% head(1) %>% pull(mtry, min_n)
+print("Best hyperparameters:")
+print(best_params)
+```
+
+```{r}
+# retrain model on best parameters
+best_params <- model_tuning %>%
+  select_best()
+print("Best Parameters:")
+print(best_params)
+
+model <- workflow() %>%
+    add_recipe(recipe) %>%
+    add_model(model_tuning_spec) %>%
+    finalize_workflow(best_params) %>%
+    # fit_resamples(resamples = train_vfold) # for v-fold cross validation
+    fit(data = train_data) # to train on whole train set with no validation set
+
+model
+```
+
+```{r}
+model %>% extract_fit_engine() %>% vip(num_features=10) +
+  theme_bw() + # Starting with a clean theme
+  theme(
+    axis.text.x = element_text(size = 14),       # X-axis tick labels
+    axis.text.y = element_text(size = 10),       # Y-axis tick labels
+    axis.title.x = element_text(size = 16),      # X-axis title
+    axis.title.y = element_text(size = 16),      # Y-axis title
+    plot.title = element_text(size = 18, face = "bold"), # Main plot title
+    legend.text = element_text(size = 12),       # Legend labels
+    legend.title = element_text(size = 14)       # Legend title
+  )
+```
+
+```{r}
+# Predict on the test set, and create a new DataFrame with inputs and outputs
+test_predictions <- model %>% predict(test_data) %>%
+    bind_cols(test_data)
+```
+
+```{r}
+# test_predictions
+```
+
+```{r, echo=FALSE}
+# What was the accuracy, precision, and recall of our model?
+test_accuracy <- test_predictions %>% metrics(truth = UST, estimate = .pred_class) %>% filter(.metric == "accuracy")
+test_accuracy
+
+test_predictions %>% group_by(UST) %>% metrics(truth = UST, estimate = .pred_class) %>% filter(.metric == "accuracy") %>% arrange(desc(.estimate)) %>% 
+    select(UST, .estimate) %>% rename(estimated_accuracy = .estimate) %>%
+    left_join(n_ust %>% select(UST, n), by = "UST") 
+
+test_predictions %>% group_by(UST) %>% precision(truth = UST, estimate = .pred_class, event_level = "multiclass") %>% arrange(desc(.estimate)) # Precision = correct positive predictions / total positive predictions
+test_predictions %>% group_by(UST) %>% recall(truth = UST, estimate = .pred_class, event_level = "multiclass") %>% arrange(desc(.estimate)) # Recall = correct positive predictions / total positive test set observations
+```
+
+```{r}
+# test_predictions %>% pull(does_it_match) %>% levels()
+confusion_matrix <- test_predictions %>%
+    conf_mat(truth = UST, estimate = .pred_class)
+confusion_matrix
+# tidy(confusion_matrix)
+```
+

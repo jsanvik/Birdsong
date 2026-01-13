@@ -1,0 +1,40 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+  Data Preprocessing/convert-jupyter-notebooks.ipynb"
+output: html_document
+---
+
+```{r}
+library(rmarkdown)
+# 1. Set the path to your folder
+# Replace 'path/to/your/folder' with your actual directory path
+folder_path <- "C:\Users\johna\OneDrive\Documents\Birdsong\03 Modelling"
+
+# 2. List all .ipynb files in the folder
+ipynb_files <- list.files(path = folder_path, 
+                          pattern = "\\.ipynb$", 
+                          full.names = TRUE)
+
+# 3. Check if any files were found
+if (length(ipynb_files) == 0) {
+  cat("No Jupyter Notebooks found in the specified directory.\n")
+} else {
+  cat("Found", length(ipynb_files), "notebooks. Starting conversion...\n")
+  
+  # 4. Loop through and convert each file
+  for (file in ipynb_files) {
+    # Generate the output filename (replaces .ipynb with .Rmd)
+    output_file <- sub("\\.ipynb$", ".Rmd", file)
+    
+    tryCatch({
+      convert_ipynb(file, output = output_file)
+      cat("Successfully converted:", basename(file), "\n")
+    }, error = function(e) {
+      cat("Error converting", basename(file), ":", conditionMessage(e), "\n")
+    })
+  }
+  
+  cat("\nConversion process complete.\n")
+}
+```
+

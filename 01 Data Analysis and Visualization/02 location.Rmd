@@ -1,0 +1,145 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\01
+  Data Analysis and Visualization/02 location.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+# Import packages
+library(tidyverse)
+```
+
+```{r}
+# import data
+data <- read_csv("../data/megazord.csv")
+```
+
+When given the dataset, I saw lattitute and longitude, and my first instinct was to plot them to visualize where the birds all are.  
+Later, when given the manuscript to read, it was cool to see that the neighbourhoods I plotted here align closely with the map presented in the manuscript.
+
+```{r}
+# Set data types and select input columns
+data <- data %>% 
+    mutate(across(contains("UST"), ~ as.factor(.x)), 
+        does_it_match = as.factor(does_it_match),
+        number_of_matches = as.integer(number_of_matches))
+```
+
+```{r}
+# NOTE: This initial attempt at graphing locations to determine the central individual contained an error: 
+# did not take into account the fact that there was more than one "M1" (one for each neighbourhood)
+# Also latitude and longitude should be switched, as shown in later graphs
+ggplot() +
+    geom_path(data = data, aes(x = M1_Lat, y = M1_Lon, color="Male 1")) +
+    geom_point(data = data, aes(x = M1_Lat, y = M1_Lon, color="Male 1")) +
+    geom_path(data = data, aes(x = M2_Lat, y = M2_Lon, color="Male 2")) +
+    geom_point(data = data, aes(x = M2_Lat, y = M2_Lon, color="Male 2")) +
+    geom_path(data = data, aes(x = M3_Lat, y = M3_Lon, color="Male 3")) +
+    geom_point(data = data, aes(x = M3_Lat, y = M3_Lon, color="Male 3")) +
+    geom_path(data = data, aes(x = M4_Lat, y = M4_Lon, color="Male 4")) +
+    geom_point(data = data, aes(x = M4_Lat, y = M4_Lon, color="Male 4")) +
+    geom_path(data = data, aes(x = M5_Lat, y = M5_Lon, color="Male 5")) +
+    geom_point(data = data, aes(x = M5_Lat, y = M5_Lon, color="Male 5")) +
+    geom_path(data = data, aes(x = M6_Lat, y = M6_Lon, color="Male 6")) +
+    geom_point(data = data, aes(x = M6_Lat, y = M6_Lon, color="Male 6")) +
+    xlab("Latitude") +
+    ylab("Longitude")
+```
+
+```{r}
+# Flight paths, colour by individual
+ggplot() +
+    geom_path(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID)) +
+    geom_point(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID)) +
+    ylab("Latitude") +
+    xlab("Longitude")
+```
+
+```{r}
+# Flight paths, colour by neighbourhood (shape by individual, not shown in legend)
+ggplot() +
+    geom_path(data = data, aes(y = M1_Lat, x = M1_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M1_Lat, x = M1_Lon, color = neighbourhood), shape = 1) +
+    geom_path(data = data, aes(y = M2_Lat, x = M2_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M2_Lat, x = M2_Lon, color = neighbourhood), shape = 2) +
+    geom_path(data = data, aes(y = M3_Lat, x = M3_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M3_Lat, x = M3_Lon, color = neighbourhood), shape = 3) +
+    geom_path(data = data, aes(y = M4_Lat, x = M4_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M4_Lat, x = M4_Lon, color = neighbourhood), shape = 4) +
+    geom_path(data = data, aes(y = M5_Lat, x = M5_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M5_Lat, x = M5_Lon, color = neighbourhood), shape = 5) +
+    geom_path(data = data, aes(y = M6_Lat, x = M6_Lon, color = neighbourhood)) +
+    geom_point(data = data, aes(y = M6_Lat, x = M6_Lon, color = neighbourhood), shape = 6) +
+    ylab("Latitude") +
+    xlab("Longitude")
+```
+
+```{r}
+# Now plotting the above graphs using for loops to keep code concise
+# Flight paths, colour by neighbourhood (shape by individual, not shown in legend)
+fig = ggplot()
+for (i in 1:6) {
+    fig <- fig + 
+        geom_path(data = data, aes_string(y = sprintf("M%s_Lat", i), x = sprintf("M%s_Lon", i), color = "neighbourhood"), shape = i) +
+        geom_point(data = data, aes_string(y = sprintf("M%s_Lat", i), x = sprintf("M%s_Lon", i), color = "neighbourhood"), shape = i)
+}
+# sprintf
+```
+
+```{r}
+# Now plotting the above graphs using for loops to keep code concise
+# Flight paths, colour by individual
+fig = ggplot()
+for (i in 1:6) {
+    fig <- fig + 
+        geom_path(data = data, aes(y = !!sym(sprintf("M%s_Lat", i)), x = !!sym(sprintf("M%s_Lon", i)), color = ID), shape = i) +
+        geom_point(data = data, aes(y = !!sym(sprintf("M%s_Lat", i)), x = !!sym(sprintf("M%s_Lon", i)), color = ID), shape = i)
+}
+fig <- fig + geom_path(data = filter(data, neighbourhood=="centre"), aes(x="M2_Lon", y="M2_Lat", color='black'))
+fig <- fig + geom_point(data = filter(data, neighbourhood=="centre"), aes(x="M2_Lon", y="M2_Lat", color='black'))
+fig
+```
+
+```{r}
+unique(data$ID)
+```
+
+```{r}
+list_of_samples = list()
+# For every individual bird and every song type
+for (id in unique(data$ID)) {
+	print(id)
+	for (song_type in unique(data$UST)) {
+		print(song_type)
+		# Get 40 random rows
+		sample <- slice_sample(filter(data, UST == song_type, ID == id), n=40)
+        print(sample)
+		# Add the sample to our list of samples
+        list_of_samples <- append(list_of_samples, list(sample))
+		# Or insert code here to do whatever you want to do with that sample (create a directory and store the files!?)
+	}
+}
+```
+
+```{r}
+list_of_samples
+```
+
+```{r}
+# TODO: Make a nice plot showing first location of each bird in north neighbourhood
+ggplot(data %>% filter(neighbourhood == "North"))
+```
+

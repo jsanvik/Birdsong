@@ -1,0 +1,205 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+  Data Preprocessing/03 matching-preprocessing.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+### Import Packages
+
+```{r}
+# Import packages
+library(tidyverse)
+options(repr.matrix.max.cols = Inf) # display all columns in tibbles
+```
+
+### Load and Trim Dataset
+
+```{r}
+# minizord.csv already removed non-songs, post-dawn, unmeasureable songs, acoustic outliers
+# see "Data Preprocessing/01 preprocessing.ipynb"
+data <- read_csv("data/minizord.csv")
+
+# Only look at North data for now
+data <- data %>% filter(neighbourhood == "north") %>% ungroup()
+```
+
+### Reformat Data: Row for each possible matching opportunity of focal male
+
+```{r}
+# Just focusing on one focal male for now (central male LbOW)
+focal_id <- "LbOW"
+focal_match_data <- data
+```
+
+```{r}
+ids <- c("LbOW", "RbDgY", "YKY", "TbTbLg", "DgTbO", "RRO") # Ordered list of IDs correstponding to M1..M6
+for (i in 1:6) {
+    print(ids[[i]])
+    for (d in unique(na.omit(filter(data, ID==ids[[i]])$date))) {
+        print(d)
+        print(nrow(filter(data, ID == ids[[i]], date == d)))
+    }
+}
+```
+
+```{r}
+print(unique(na.omit(data$ID)))
+```
+
+```{r}
+# Make column for time since Male N's last song
+# NA values at top of each day until that male sings
+ids <- c("LbOW", "RbDgY", "YKY", "TbTbLg", "DgTbO", "RRO") # Ordered list of IDs correstponding to M1..M6
+for (i in 1:6) {
+    print(ids[[i]])
+    time_last_song <- sprintf("time_M%i_last_song", i)
+    time_since_last_song <- sprintf("time_since_M%i_last_song", i)
+    print(time_last_song)
+    focal_match_data <- focal_match_data %>%
+    arrange(DateTime) %>%
+    mutate("{time_last_song}" := if_else(ID == ids[[i]], time_rel_sunrise, NA)) %>%
+    group_by(date) %>%
+    fill({time_last_song}, .direction = "down") %>%
+    mutate("{time_since_last_song}" := time_rel_sunrise - !!sym({time_last_song})) %>%
+    ungroup()
+}
+```
+
+```{r}
+# Male i's nth last song
+N_MAX <- 3
+for (n in 1:N_MAX) {
+        for (i in 1:6) {
+                n_last_song <- sprintf("M%i_%i_last_UST", i, n)
+                time_last_song <- sprintf("time_M%i_%i_last_song", i, n)
+                time_since_last_song <- sprintf("time_since_M%i_%i_last_song", i, n)
+                focal_match_data <- focal_match_data %>%
+                # Sort by ID and DateTime
+                        group_by(ID) %>%
+                        arrange(DateTime) %>%
+                # Take the Nth last UST, set it to MX_Nth_last_UST
+                        mutate("{n_last_song}" := if_else(ID == ids[[i]], lag(UST, n-1), NA)) %>%
+                        # mutate("{time_last_song}" := if_else(ID == ids[[i]], time_rel_sunrise, NA)) %>%
+                        mutate("{time_last_song}" := if_else(ID == ids[[i]], lag(time_rel_sunrise, n-1), NA)) %>%
+                        ungroup() %>% 
+                # Sort by DateTime, forward fill
+                        group_by(date) %>%
+                        arrange(DateTime) %>%
+                        fill({n_last_song}, .direction = "down") %>%
+                        fill({time_last_song}, .direction = "down") %>%
+                # Since we don't want the current song to count as the 1st last song, recalculate last songs for rows where ID matches MX
+                        group_by(ID, date) %>%
+                        arrange(DateTime) %>%
+                        mutate("{n_last_song}" := if_else(ID == ids[[i]], lag(UST, n), !!sym({n_last_song}))) %>%
+                        mutate("{time_last_song}" := if_else(ID == ids[[i]], lag(time_rel_sunrise, n), !!sym({time_last_song}))) %>%
+                        ungroup() %>% 
+                # Calculate time since Nth last song
+                        group_by(date) %>%
+                        mutate("{time_since_last_song}" := time_rel_sunrise - !!sym({time_last_song})) %>%
+                        ungroup()
+        }
+}
+```
+
+```{r}
+# How frequently do individuals typically sing?
+for (i in 1:6) {
+    print(i)
+    plotting_data <- focal_match_data %>% 
+        filter(ID == ids[[i]])
+    plotting_column <- sprintf("time_since_M%i_1_last_song", i)
+    plot <- ggplot(plotting_data) + 
+        geom_histogram(aes(x=!!sym(plotting_column)))
+    print(plot)
+}
+```
+
+```{r}
+focal_match_data %>% select(contains("_1_last_song")) %>% select(contains("time_since")) %>% summary()
+# focal_match_data %>% select(contains("_1_last_song")) %>% select(contains("time_since")) %>% quantile(probs=c(.1, .2, .3, .4, .5, .6, .7, .8, .9, 1), na.rm=TRUE)
+```
+
+```{r}
+tail(focal_match_data)
+```
+
+```{r}
+# Focal Male's song-type repertoire
+focal_repertoire <- unique(filter(data, ID == focal_id)$UST)
+print("Focal Male's Song Type Repertoire:")
+focal_repertoire
+
+# Select only rows with focal male's songs
+focal_match_data <- focal_match_data %>%
+    filter(ID == focal_id) %>%
+# Input variables: M1-M6's last UST, time since M1-M6 UST, # M2-M6's distance
+    select(
+        UST,
+        DateTime, time_rel_sunrise,
+        "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6",
+        "M1_last_UST", "M2_last_UST", "M3_last_UST", "M4_last_UST", "M5_last_UST", "M6_last_UST",
+        
+        contains("last_UST"), # Nth last song
+        contains("last_song"), # Time since last song
+        # time_M1_last_song, time_M2_last_song, time_M3_last_song, time_M4_last_song, time_M5_last_song, time_M6_last_song,
+    	time_since_M1_last_song, time_since_M2_last_song, time_since_M3_last_song, time_since_M4_last_song, time_since_M5_last_song, time_since_M6_last_song, # did not include time since M1 last song because it is always 0
+        number_of_matches, does_it_match
+        # Also consider adding "streak"
+    ) %>% 
+    mutate(across(contains("UST"), ~ as.factor(.x)), 
+        does_it_match = as.factor(does_it_match),
+        number_of_matches = as.integer(number_of_matches)) %>%
+# Set all neighbours' songs that aren't in M1's repertoire to 0
+    mutate(across(contains("UST"), ~ if_else (.x %in% focal_repertoire, .x, as.factor(0)))) %>%
+# Also set NA song types to 0, for all Males except M1
+    mutate(across(contains("UST"), ~ if_else (is.na(.x), as.factor(0), .x)))
+```
+
+```{r}
+# If song sung more than X*n seconds ago, set to 0
+x <- 15
+
+for (n in 1:N_MAX) {
+        for (i in 1:6) {
+                n_last_song <- sprintf("M%i_%i_last_UST", i, n)
+                time_since_last_song <- sprintf("time_since_M%i_%i_last_song", i, n)
+                focal_match_data <- focal_match_data %>%
+                mutate("{n_last_song}" := if_else(!!sym({time_since_last_song}) > x*n, as.factor(0), !!sym({n_last_song})))
+        }
+}
+```
+
+```{r}
+# How frequently do individuals typically sing?
+for (i in 1:6) {
+    plotting_column <- sprintf("time_since_M%i_1_last_song", i)
+    plot <- ggplot(focal_match_data) + 
+        geom_histogram(aes(x=!!sym(plotting_column)))
+    print(plot)
+}
+```
+
+```{r}
+# Compared to M1's repertoire, which songs are in the other males' repertoires?
+# print("Male 1's Repertoire:")
+# print(focal_repertoire)
+for (i in 1:6) {
+    print(sprintf("Male %i's Repertoire:", i))
+    print(pull(unique(focal_match_data %>% select({sprintf("M%i_last_UST", i)}))))
+    # print("\n")
+}
+```
+
+```{r}
+head(focal_match_data)
+```
+
+### Export Data
+
+```{r}
+write_csv(focal_match_data, "data/matching_opportunities.csv")
+```
+

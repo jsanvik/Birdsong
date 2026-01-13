@@ -1,0 +1,171 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\03
+  Modelling/01 match_knn.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+Import Packages
+
+```{r}
+# install.packages("tidymodels")
+# install.packages('rlang')
+# install.packages("kknn")
+library(tidyverse)
+library(tidymodels)
+
+# set random seed
+set.seed(42)
+```
+
+Load data
+
+```{r}
+data <- read_csv("data/matching_opportunities.csv") %>%
+    drop_na() # drop any row containing at least one NA value
+```
+
+```{r}
+# Model Inputs
+model_columns <- c(
+        # "UST", 
+        "does_it_match",
+        "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6",
+        # TODO: Add M1 last UST, but shift it 1 back (not M1's current song, but M1's previous song)
+        "M2_last_UST", "M3_last_UST", "M4_last_UST", "M5_last_UST", "M6_last_UST", # TODO: These are categorical variables, how does this implementation of knn handle those?
+        # "time_M1_last_song", "time_M2_last_song", "time_M3_last_song", "time_M4_last_song", "time_M5_last_song", "time_M6_last_song",
+    	"time_since_M2_last_song", "time_since_M3_last_song", "time_since_M4_last_song", "time_since_M5_last_song", "time_since_M6_last_song", # did not include time since M1 last song because it is always 0
+        "time_rel_sunrise"
+    )
+```
+
+```{r}
+# Set data types and select input columns
+data <- data %>% 
+    mutate(across(contains("UST"), ~ as.factor(.x)), 
+        does_it_match = as.factor(does_it_match),
+        number_of_matches = as.integer(number_of_matches)) %>%
+    select(model_columns)
+```
+
+```{r}
+glimpse(data)
+```
+
+```{r}
+
+# train test split
+train_test_split <- initial_split(data, prop = 0.7, strata=does_it_match)
+
+train_data <- train_test_split %>% training()
+test_data <- train_test_split %>% testing()
+
+# In training data, how many song type matches?
+train_data %>%
+    group_by(does_it_match) %>%
+    summarize(n = n()) %>%
+    mutate(percent = 100*n/nrow(train_data))
+
+# use v-fold cross validation to assess model accuracy
+v <- 10
+train_vfold <- vfold_cv(train_data, v=v, strata = does_it_match)
+```
+
+```{r}
+# Data preprocessing using a recipe
+recipe <- recipe(does_it_match ~ ., data = train_data) %>%
+    step_scale(all_numeric()) %>% # scale all numeric predictors
+    step_center(all_numeric()) # center all numeric predictors
+```
+
+```{r}
+# Create model specification
+k_model_tuning_spec <- nearest_neighbor(weight_func = tune(), neighbors=tune()) %>%
+    set_engine("kknn") %>%
+    set_mode("classification")
+```
+
+```{r}
+k_vals <- tibble(neighbours = seq(from = 1, to = 20, by = 1))
+k_model_tuning <- workflow() %>%
+    add_recipe(recipe) %>%
+    add_model(k_model_tuning_spec) %>%
+
+        tune_grid(resamples = train_vfold, neighbors = k_vals) # for v-fold cross validation, tuning k parameter
+        # fit(data = train_data) # to train on whole train set with no validation set
+
+k_model_tuning
+```
+
+```{r}
+k_model_tuning_accuracies <- k_model_tuning %>% collect_metrics() %>% filter(.metric == "accuracy")
+k_model_tuning_accuracies
+```
+
+```{r}
+# plot accuracies of all values of k
+
+ggplot(k_model_tuning_accuracies) +
+    geom_line(aes(x=neighbors, y=mean)) +
+    geom_point(aes(x=neighbors, y=mean, size=2)) +
+    labs(x = "Neighbours", y = "Accuracy Estimate") +
+    theme(text = element_text(size=20))
+
+# Print best value of k
+best_k <- k_model_tuning_accuracies %>% arrange(desc(mean)) %>% head(1) %>% pull(neighbors)
+print("Best k-value:")
+print(best_k)
+print(k_model_tuning_accuracies %>% arrange(desc(mean)) %>% head(1) %>% pull(mean))
+```
+
+```{r}
+# retrain model on best k-value
+
+# Create model specification
+model_spec <- nearest_neighbor(weight_func = "rectangular", neighbors = best_k ) %>%
+    set_engine("kknn") %>%
+    set_mode("classification")
+
+model <- workflow() %>%
+    add_recipe(recipe) %>%
+    add_model(model_spec) %>%
+    # fit_resamples(resamples = train_vfold) # for v-fold cross validation
+    fit(data = train_data) # to train on whole train set with no validation set
+
+model
+```
+
+```{r}
+# Predict on the test set, and create a new DataFrame with inputs and outputs
+test_predictions <- model %>% predict(test_data) %>%
+    bind_cols(test_data)
+```
+
+```{r}
+# test_predictions
+```
+
+```{r}
+# What was the accuracy, precision, and recall of our model?
+test_predictions %>% metrics(truth = does_it_match, estimate = .pred_class)
+test_predictions %>% precision(truth = does_it_match, estimate = .pred_class, event_level = "second") # Precision = correct positive predictions / total positive predictions
+test_predictions %>% recall(truth = does_it_match, estimate = .pred_class, event_level = "second") # Recall = correct positive predictions / total positive test set observations
+```
+
+```{r}
+# test_predictions %>% pull(does_it_match) %>% levels()
+confusion_matrix <- test_predictions %>%
+    conf_mat(truth = does_it_match, estimate = .pred_class)
+confusion_matrix
+```
+
+```{r}
+# Test classifier on a random row in the DataFrame
+test_observation <- slice_sample(test_data %>% mutate(across(where(is.numeric), ~ replace_na(.x, 0))), n=1)
+print(test_observation)
+test_prediction <- model %>% predict(test_observation)
+print(test_prediction)
+```
+

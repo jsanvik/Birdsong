@@ -1,0 +1,66 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\01
+  Data Analysis and Visualization/03 songs.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+library(tidyverse)
+data <- read_csv("../data/megazord.csv")
+```
+
+```{r}
+data %>% select(ID, DateTime, date, time_rel_sunrise, UST, IST, neighbourhood, Lat, Lon)
+```
+
+```{r}
+northdata <- data %>% filter(neighbourhood == "north")
+centredata <- data %>% filter(neighbourhood == "centre")
+# southdata <- data %>% filter(neighbourhood == "south") # Ignoring south neighbourhood for now due to lack of good data
+```
+
+```{r}
+print(
+    ggplot() +
+    geom_bar(data=data, aes(UST, color=neighbourhood)) +
+    xlab("Song Type")
+)
+```
+
+```{r}
+# North neighbourhood
+print(
+    ggplot() +
+    geom_bar(data=northdata, aes(UST, color=ID)) +
+    xlab("Song Type")
+)
+
+# Centre neighbourhood
+print(
+    ggplot() +
+    geom_bar(data=centredata, aes(UST, color=ID)) +
+    xlab("Song Type")
+)
+```
+
+```{r}
+ggplot() + geom_point(data=data, aes(y=UST, x=ID, color = neighbourhood))
+```
+
+```{r}
+# Do certain song types have more matches?
+ggplot() + 
+    geom_point(data=data, aes(x=UST, y=number_of_matches, color=neighbourhood))
+```
+
+```{r}
+# How many times were song types repeated?
+# One is the most common value by far, suggesting song types are very rarely repeated
+# Two is very rare, it appears the maximum is eight
+ggplot() +
+    geom_bar(data=northdata, aes(x=Repeat_ST_Run))
+```
+

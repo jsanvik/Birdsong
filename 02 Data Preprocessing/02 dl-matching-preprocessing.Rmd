@@ -1,0 +1,130 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+  Data Preprocessing/02 dl-matching-preprocessing.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+Adapted from David Logue's code
+
+### Import Packages
+
+```{r}
+# Import packages
+# install.packages("geosphere")
+library(geosphere) # For distm(), for calculating distances
+library(tidyverse)
+# library(dagitty)
+# library(brms)
+# library(forestplot)
+# library(lqmm)
+```
+
+### Load and Trim Dataset
+
+```{r}
+data <- read_csv("data/megazord.csv")
+
+# Only look at North data for now
+data <- data %>% filter(neighbourhood == "north") %>% ungroup()
+```
+
+### Reformat Data: Row for each possible matching opportunity of focal male
+
+```{r}
+# Get all unique focal male IDs (excluding NAs)
+focal_ids <- unique(na.omit(data$ID))
+print(focal_ids)
+
+# Initialize an empty list to store the output dataframes
+focal_outputs <- list()
+
+# Just focusing on one focal male for now (central male LbOW)
+focal_id <- "LbOW"
+# Get rows in which ID == focal_id
+focals_data <- filter(data, ID == focal_id)
+
+# Get unique set of USTs for the focal (including NA values)
+focal_repertoire <- unique(focals_data$UST)
+
+# Find all rows that have a UST in focal's repertoire, not including NA values
+focal_ind <- data %>% filter(UST %in% focal_repertoire & !is.na(UST))
+# Group these rows by date, create columns to show focal's next UST
+focal_ind <- focal_ind %>%
+    group_by(date) %>% # Group by date so we're not comparing "last song" across days
+    mutate(focal_next_UST = if_else(ID == focal_id, UST, NA)) %>%
+    fill(focal_next_UST, .direction = "up")
+
+# Create column focal_matches : binary variable (is there a song type match?)
+# If the focal bird is the singer, it cannot match itself, return 0
+# If the focal bird is not the singer, does the song type match the focal's next song? (within day)
+focal_ind <- focal_ind %>%
+    mutate(focal_matches = if_else(ID == focal_id, NA,
+                                    if_else(focal_next_UST == UST, 1, 0)))
+```
+
+### Calculate Distances for Each Matching Opportunity
+
+```{r}
+# Coordinates for focal male and singing male
+coords1 <- cbind(focal_ind$M1_Lat, focal_ind$M1_Lon) #TODO: Check if M1 is the correct male here
+coords2 <- cbind(focal_ind$Lat, focal_ind$Lon)
+
+# Distance matrix is a function of the two coordinate sets
+dist_matrix <- distm(coords1, coords2, fun = distHaversine)
+# focal_ind %>% mutate(dist_to_focal = diag(dist_matrix))
+focal_ind$dist_to_focal <- diag(dist_matrix)
+```
+
+### Create other Columns
+
+```{r}
+# Make column "Focal_ID"
+focal_ind$Focal_ID <- focal_id
+```
+
+```{r}
+# Make column for time since focal male's last song
+# NA values at top of each day until focal male sings
+focal_ind <- focal_ind %>% 
+    group_by(date) %>%
+    mutate(time_focals_last_song = if_else(ID == focal_id, time_rel_sunrise, NA)) %>%
+    fill(time_focals_last_song, .direction = "down") %>%
+    mutate(time_since_focals_last_song = time_rel_sunrise - time_focals_last_song) %>%
+    ungroup() %>%
+    # make column which contains the time of focal's songs (like "time_focal's_last_song", but not f-filled)
+    mutate(just_focal_time = ifelse(ID == focal_id, time_rel_sunrise, NA))
+```
+
+```{r}
+# Group by date and UST to make column showing time focal last sang a song type
+focal_ind <- focal_ind %>%
+    group_by(date, UST) %>%
+    mutate(time_focals_last_rend_ST = lag(just_focal_time)) %>%
+    fill(time_focals_last_rend_ST, .direction = "down") %>%
+    mutate(time_since_focals_last_rend_ST = -1 * (time_focals_last_rend_ST - time_rel_sunrise))
+```
+
+```{r}
+# Select only necessary variables
+focal_ind_lean <- focal_ind %>%
+    select(index, Focal_ID, date, ID, time_rel_sunrise, UST, number_of_matches,
+        does_it_match, focal_matches, dist_to_focal, time_since_focals_last_song,
+        time_focals_last_rend_ST, time_since_focals_last_rend_ST, focal_next_UST:time_since_focals_last_rend_ST) %>%
+# Remove focal's songs (which he cannot match)
+    filter(ID != focal_id) %>%
+    ungroup()
+```
+
+```{r}
+head(focal_ind_lean)
+```
+
+### Export Data
+
+```{r}
+write_csv(focal_ind_lean, "../data/all_matching_opportunities.csv")
+```
+

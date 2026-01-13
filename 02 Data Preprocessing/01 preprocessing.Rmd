@@ -1,0 +1,193 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+  Data Preprocessing/01 preprocessing.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+rawdata <- read_csv("data/megazord.csv")
+```
+
+```{r}
+columns_of_interest <- c(
+    "ID", # Which male is singing (each has a unique identifier)
+    "DateTime", # Date AND Time
+    "date",
+    "time_rel_sunrise", # How much time has passed since sunrise
+    "UST", # Universal Song Type
+    "IST", # Individual Song Type 
+    "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6", "D_M2_M3", "D_M2_M4", "D_M2_M5", "D_M2_M6", "D_M3_M4", "D_M3_M5", "D_M3_M6", "D_M4_M5", "D_M4_M6", "D_M5_M6", # IID - inter-individual distance between Males 
+    "M1_Lat", "M1_Lon", "M2_Lat", "M2_Lon", "M3_Lat", "M3_Lon", "M4_Lat", "M4_Lon", "M5_Lat", "M5_Lon", "M6_Lat", "M6_Lon", # Latitude and Longitude
+    "M1_last_UST", "M2_last_UST", "M3_last_UST", "M4_last_UST", "M5_last_UST", "M6_last_UST", # Last song type
+    "M1_match", "M2_match", "M3_match", "M4_match", "M5_match", "M6_match",  # Does focal male match with Male X's last song? (Cannot match with itself)
+    "number_of_matches", # How many males' last song matches with the focal male's song?
+    "does_it_match", # Does the focal male's current song match with any other male's most recent song?
+    "neighbourhood", # North, Centre, or South. We'll be starting our analysis on the North neighbourhood
+    "Location_Number", 
+    "Time_Diff", # Time since this bird's own last song
+    "RepeatST", # Is this a repeat of a song the bird just sang?
+    "Repeat_ST_Run" # How many songs of the same type have been repeated in this run? ("Streak")
+    # "Phase" # DC (Dawn Chorus) or PDC (Post-Dawn Chorus) TODO: Filter out PDC data
+    # "Data_Class" # We are only interested in "song"
+    )
+```
+
+```{r}
+
+
+data <- rawdata %>% 
+    filter(Data_Class == "song") %>% # Only interested in song data
+    filter(Phase == "DC") %>% # Only interested in Dawn Chorus songs
+    # filter(LOKI == 0, acoustic_outlier == 0) %>% # Remove Loggerhead Kingbird interference and acoustic outliers # NOTE: only do this if doing acoustic analysis
+    select(columns_of_interest) %>% 
+    arrange(desc("DateTime")) %>%
+    mutate(across(contains("UST"), ~ as.factor(.x))) # Song type is categorical attribute, not numerical
+
+summary(data)
+```
+
+### Export Data
+
+```{r}
+write_csv(data, "../data/minizord.csv")
+```
+
+```{r}
+# This cell used for easy copy/paste of column names
+
+"...1"
+"X.2"
+"X.1"
+"selec"
+"start"
+"end"
+"date"
+"ID"
+"recordist"
+"Begin.Path"
+"File.Offset..s."
+"SNR.NIST.Quick..dB."
+"Location_Number"
+"Comments"
+"ST1"
+"Data_Class"
+"selec.file"
+"sound.files"
+"click_clock"
+"click_rec"
+"start_hms"
+"click_clock_hms"
+"click_rec_hms"
+"clock_time"
+"sunrise"
+"time_rel_sunrise"
+"M1_Off"
+"M2_Off"
+"M3_Off"
+"M4_Off"
+"M5_Off"
+"M6_Off"
+"Lat"
+"Lon"
+"M1_Lat"
+"M1_Lon"
+"M2_Lat"
+"M2_Lon"
+"M3_Lat"
+"M3_Lon"
+"M4_Lat"
+"M4_Lon"
+"M5_Lat"
+"M5_Lon"
+"M6_Lat"
+"M6_Lon"
+"D_M1_M2"
+"D_M1_M3"
+"D_M1_M4"
+"D_M1_M5"
+"D_M1_M6"
+"D_M2_M3"
+"D_M2_M4"
+"D_M2_M5"
+"D_M2_M6"
+"D_M3_M4"
+"D_M3_M5"
+"D_M3_M6"
+"D_M4_M5"
+"D_M4_M6"
+"D_M5_M6"
+"IST"
+"X"
+"UST"
+"M1_last_UST"
+"M2_last_UST"
+"M3_last_UST"
+"M4_last_UST"
+"M1_match"
+"M2_match"
+"M3_match"
+"M4_match"
+"neighbourhood"
+"M5_last_UST"
+"M6_last_UST"
+"M5_match"
+"M6_match"
+"number_of_matches"
+"does_it_match"
+"song_end_time"
+"DateTime"
+"Bird_Date"
+"Time_Diff"
+"RepeatST"
+"GreaterThanT"
+"Repeat_ST_Run"
+"Long_Latency_Run"
+"meets_lat_thresh"
+"meets_rep_thresh"
+"meets_either_thresh"
+"Phase"
+"End_DC"
+"index"
+"orig_start"
+"orig_end"
+"rms"
+"LOKI"
+"note_count"
+"song_start"
+"song_end"
+"song_duration"
+"note_duration"
+"gap_duration"
+"percent_sound"
+"min_freq"
+"max_freq"
+"peak_freq"
+"max_note_dur"
+"mean_freq"
+"last_note_dur"
+"freq_BW_subtraction"
+"freq_BW_ratio"
+"TR_unbiased"
+"mean_note_dur"
+"mean_gap_dur"
+"acoustic_outlier"
+"avg_note_dur_nl"
+"avg_gap_dur_nl"
+"avg_note_gap_ratio_nl"
+"avg_note_gap_difference_nl"
+"avg_min_freq_nl"
+"avg_max_freq_nl"
+"avg_note_bw_ratio_nl"
+"avg_note_FM_nl"
+"avg_silent_jump_ratio_nl"
+"avg_silent_gap_FM_nl"
+"avg_recovery_time_nl"
+```
+
