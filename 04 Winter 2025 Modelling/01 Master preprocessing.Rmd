@@ -1,0 +1,192 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\04
+  Winter 2025 Modelling/01 Master preprocessing.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+# Import packages
+library(tidyverse)
+options(repr.matrix.max.cols = Inf) # display all columns in tibbles
+```
+
+```{r}
+# A lookup table to easily access IDs /ID numbers for each neighbourhood
+focal_males <- tibble::tribble(
+    ~neighbourhood, ~male_number, ~ID,
+    "north",  "1", "LbOW",
+    "north",  "2", "RbDgY",
+    "north",  "3", "YKY",
+    "north",  "4", "TbTbLg",
+    "north",  "5", "DgTbO",
+    "north",  "6", "RRO",
+    "centre", "1", "TbWY",
+    "centre", "2", "KRDg",
+    "centre", "3", "OPR",
+    "centre", "4", "WLpTb",
+    "centre", "5", "KLgK",
+    "centre", "6", "DgTbO"
+)
+```
+
+```{r}
+# minizord.csv already removed non-songs, post-dawn, unmeasureable songs, acoustic outliers
+# see "Data Preprocessing/01 preprocessing.ipynb"
+
+# Import data
+raw_data <- read_csv("data/minizord.csv")
+
+# EXCLUDE SOUTH NEIGHBOURHOOD
+raw_data <- raw_data %>% filter(neighbourhood != "south")
+
+neighbourhoods <- sort(unique(na.omit(raw_data$neighbourhood)))
+focal_ids <- unique(na.omit(raw_data$ID))
+
+data_list <- list()
+
+for (id in focal_ids) {
+    cat(id, focal_males %>% filter(ID == id) %>% pull(neighbourhood), "\n")
+    data_to_append <- raw_data %>% filter(neighbourhood %in% (focal_males %>% filter(ID == id) %>% pull(neighbourhood)))
+    data_list <- append(data_list, list(data_to_append))
+}
+names(data_list) <- focal_ids
+```
+
+```{r}
+length(data_list)
+```
+
+```{r}
+# Which song types are present in each focal male's neighbourhood(s)?
+for (id in focal_ids) {
+    cat("All songs types in ", id, "'s neighbourhood", "\n")
+    all_song_types <- sort(unique(na.omit(data_list[[id]]$UST)))
+    print(all_song_types)
+    print
+}
+```
+
+```{r}
+# Which song types are present in each focal male's neighbourhood(s)?
+data_list %>% map(~ print(sort(na.omit(unique(.x$UST)))))
+```
+
+```{r}
+data_list <- data_list %>% 
+    map(~ .x %>% mutate(UST = replace_na(UST, 0))) %>% # NA song type values mess up our feature engineering below, we'll set them to zero
+    map(~ .x %>%     mutate(across(contains("UST"), ~ as.factor(.x)), 
+            does_it_match = as.factor(does_it_match),
+            number_of_matches = as.integer(number_of_matches)))
+```
+
+```{r}
+for (focal_id in focal_ids) {
+    print(focal_id)
+    data_list[[focal_id]] <- data_list[[focal_id]] %>%
+        arrange(DateTime) %>%
+        mutate(focal_male_song_number = cumsum(ID == focal_id)) %>% # Number each song focal male sings: we will group by this column later
+        mutate(focal_male_song_number = replace_na(lag(focal_male_song_number, n = 1), 0)) # We want this value to increment the row AFTER M1's song type
+        # write_csv(data_list[[focal_id]], "data/temp.csv")
+}
+```
+
+```{r}
+# Create a column for the number of times the focal male has heard each song type since it last sang
+
+for (focal_id in focal_ids) {
+    print(focal_id)
+    data_list[[focal_id]] <- data_list[[focal_id]] %>% arrange(DateTime) %>% group_by(focal_male_song_number)
+    for (song_type in all_song_types) {
+        n_ust <- sprintf("n_ust_%i", song_type)
+        data_list[[focal_id]] <- data_list[[focal_id]] %>% mutate("{n_ust}" := 0) %>%
+        mutate("{n_ust}" := cumsum((UST == song_type) & (ID != focal_id))) # Count each song type, don't count M1's current song
+    }
+    # Create a column for the total number of other males' songs that M1 has heard since it last sang
+    data_list[[focal_id]] <- data_list[[focal_id]] %>% mutate(n_ust_total = cumsum(ID != focal_id))
+    data_list[[focal_id]] <- data_list[[focal_id]] %>% ungroup()
+    # write_csv(data_list[[focal_id]], "data/temp.csv")
+}
+```
+
+```{r}
+# focal_males %>% filter(neighbourhood == focal_neighbourhood) %>% filter(male_number == i) %>% pull(ID)
+# # mutate("{n_last_song}" := if_else(ID == focal_males[[i]], lag(UST, n-1), NA))
+```
+
+```{r}
+# Calculate time since each Male's last song
+# Male i's nth last song
+
+N_MAX <- 3 # Find 1st - 3rd last song thypes
+
+for (focal_id in focal_ids) {
+        focal_neighbourhood <- data_list[[focal_id]] %>% pull(neighbourhood) %>% unique
+        print(focal_neighbourhood)
+        for (n in 1:N_MAX) {
+                for (i in 1:6) {
+                        id <- focal_males %>% filter(neighbourhood == focal_neighbourhood) %>% filter(male_number == i) %>% pull(ID)
+                        n_last_song <- sprintf("M%i_%i_last_UST", i, n)
+                        time_last_song <- sprintf("time_M%i_%i_last_song", i, n)
+                        time_since_last_song <- sprintf("time_since_M%i_%i_last_song", i, n)
+                        data_list[[focal_id]] <- data_list[[focal_id]] %>%
+                        # Sort by ID and DateTime
+                                group_by(ID) %>%
+                                arrange(DateTime) %>%
+                        # Take the Nth last UST, set it to MX_Nth_last_UST
+                                mutate("{n_last_song}" := if_else(ID == id, lag(UST, n-1), NA)) %>%
+                                # mutate("{time_last_song}" := if_else(ID == id, time_rel_sunrise, NA)) %>%
+                                mutate("{time_last_song}" := if_else(ID == id, lag(time_rel_sunrise, n-1), NA)) %>%
+                                ungroup() %>% 
+                        # Sort by DateTime, forward fill
+                                group_by(date) %>%
+                                arrange(DateTime) %>%
+                                fill({n_last_song}, .direction = "down") %>%
+                                fill({time_last_song}, .direction = "down") %>%
+                        # Since we don't want the current song to count as the 1st last song, recalculate last songs for rows where ID matches MX
+                                group_by(ID, date) %>%
+                                arrange(DateTime) %>%
+                                mutate("{n_last_song}" := if_else(ID == id, lag(UST, n), !!sym({n_last_song}))) %>%
+                                mutate("{time_last_song}" := if_else(ID == id, lag(time_rel_sunrise, n), !!sym({time_last_song}))) %>%
+                                ungroup() %>% 
+                        # Calculate time since Nth last song
+                                group_by(date) %>%
+                                mutate("{time_since_last_song}" := time_rel_sunrise - !!sym({time_last_song})) %>%
+                                ungroup()
+                }
+        }
+}
+```
+
+```{r}
+# Select relevant predictors
+for (focal_id in focal_ids) {
+    data_list[[focal_id]] <- data_list[[focal_id]] %>%
+        filter(ID == focal_id) %>%
+        select(
+            # ID, # TODO: remove this column
+            UST,
+            DateTime, time_rel_sunrise,
+            "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6",
+            contains("last_UST"), # Nth last song
+            contains("last_song"), # Time since last song
+            focal_male_song_number,
+            time_since_M1_1_last_song,
+            DateTime, time_rel_sunrise,
+            contains("n_ust_"), # n_ust_X = Number of times song type X has been heard since M1's last song
+            # time_M1_last_song, time_M2_last_song, time_M3_last_song, time_M4_last_song, time_M5_last_song, time_M6_last_song,
+            # time_since_M1_last_song, time_since_M2_last_song, time_since_M3_last_song, time_since_M4_last_song, time_since_M5_last_song, time_since_M6_last_song, # did not include time since M1 last song because it is always 0
+            number_of_matches, does_it_match
+            # Also consider adding "streak"
+        )
+}
+```
+
+```{r}
+for (focal_id in focal_ids) {
+    write_csv(data_list[[focal_id]], sprintf("data/by_id/%s_song_type_id_frequency.csv", focal_id))
+}
+```
+

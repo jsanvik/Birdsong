@@ -1,6 +1,6 @@
 ---
-title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
-  Data Preprocessing/convert-jupyter-notebooks.ipynb"
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\04
+  Winter 2025 Modelling/convert-jupyter-notebooks.ipynb"
 output: html_document
 ---
 
@@ -8,7 +8,7 @@ output: html_document
 library(rmarkdown)
 # 1. Set the path to your folder
 # Replace 'path/to/your/folder' with your actual directory path
-folder_path <- "C:\Users\johna\OneDrive\Documents\Birdsong\03 Modelling"
+folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\04 Winter 2025 Modelling"
 
 # 2. List all .ipynb files in the folder
 ipynb_files <- list.files(path = folder_path, 
