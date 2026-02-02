@@ -1,5 +1,5 @@
 ---
-title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/02
   Data Preprocessing/07 centre_song id and frequency preprocessing.ipynb"
 output: html_document
 ---
@@ -16,7 +16,7 @@ options(repr.matrix.max.cols = Inf) # display all columns in tibbles
 ```{r}
 # minizord.csv already removed non-songs, post-dawn, unmeasureable songs, acoustic outliers
 # see "Data Preprocessing/01 preprocessing.ipynb"
-data <- read_csv("../data/minizord.csv")
+data <- read_csv("data/minizord.csv")
 
 # Only look at Centre data for now
 data <- data %>% filter(neighbourhood == "centre") %>% ungroup()

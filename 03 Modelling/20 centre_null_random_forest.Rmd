@@ -1,5 +1,5 @@
 ---
-title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\03
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/03
   Modelling/20 centre_null_random_forest.ipynb"
 output: html_document
 ---
@@ -28,7 +28,7 @@ set.seed(42)
 Load data
 
 ```{r}
-data <- read_csv("../data/centre_song_type_id_frequency.csv")
+data <- read_csv("data/centre_song_type_id_frequency.csv")
 ```
 
 ```{r}
@@ -208,6 +208,3 @@ confusion_matrix <- test_predictions %>%
 confusion_matrix
 ```
 
-```{r}
-print("Hello)
-```

@@ -1,5 +1,5 @@
 ---
-title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\02
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/02
   Data Preprocessing/03.5 centre-matching-preprocessing.ipynb"
 output: html_document
 ---
@@ -36,7 +36,7 @@ focal_match_data <- data
 ```
 
 ```{r}
-ids <- c("TbWY", "KRDg", "OPR", "WLpTb", "KLgK", "DgTbO") # Ordered list of IDs correstponding to M1..M6
+ids <- c("TbWY", "KRDg", "OPR", "WLpTb", "KLgK", "DgTbO") # Centre Ordered list of IDs correstponding to M1..M6
 for (i in 1:6) {
     print(ids[[i]])
     for (d in unique(na.omit(filter(data, ID==ids[[i]])$date))) {

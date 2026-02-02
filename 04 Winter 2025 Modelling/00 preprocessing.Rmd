@@ -1,5 +1,5 @@
 ---
-title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong\04
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/04
   Winter 2025 Modelling/00 preprocessing.ipynb"
 output: html_document
 ---
@@ -53,41 +53,8 @@ summary(data)
 
 ```{r}
 # # Add a feature for focal male's M number
-# north_ids = list("1" = "LbOW", "2" = "RbDgY", "3" = "YKY", "4" = "TbTbLg", "5" = "DgTbO", "6" = "RRO")
-# centre_ids <- list("1" = "TbWY", "2" = "KRDg", "3" = "OPR", "4" = "WLpTb", "5" = "KLgK", "6" = "DgTbO")
-# # TODO: 
-# data <- data %>% mutate(
-#      mutate("{n_last_song}" := if_else(ID == ids[[i]], lag(UST, n-1), NA)) %>%
-#     male_number <- if_else(neighbourhood == "north", )
-# )
-```
-
-```{r}
-# data <- data %>% 
-#     mutate(male_number = case_match(neighbourhood,
-#         as.factor("north") ~ case_match(ID,
-#             "1" ~ "LbOW", 
-#             "2" ~ "RbDgY", 
-#             "3" ~ "YKY", 
-#             "4" ~ "TbTbLg", 
-#             "5" ~ "DgTbO", 
-#             "6" ~ "RRO"
-#         ),
-#         as.factor("centre") ~ case_match(ID,
-#             "1" ~ "TbWY", 
-#             "2" ~ "KRDg", 
-#             "3" ~ "OPR", 
-#             "4" ~ "WLpTb", 
-#             "5" ~ "KLgK", 
-#             "6" ~ "DgTbO"
-#         )
-#     ))
-```
-
-```{r}
-# TODO: Figure this out
 lookup_table <- tibble::tribble(
-    ~neighbourhood, ~ID, ~male_number,
+    ~neighbourhood, ~male_number, ~ID,
     "north",  "1", "LbOW",
     "north",  "2", "RbDgY",
     "north",  "3", "YKY",
@@ -112,7 +79,7 @@ data
 ### Export Data
 
 ```{r}
-write_csv(data, "../data/minizord.csv")
+write_csv(data, "data/minizord.csv")
 ```
 
 ```{r}
