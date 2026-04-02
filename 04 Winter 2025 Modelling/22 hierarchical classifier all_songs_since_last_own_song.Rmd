@@ -1,0 +1,450 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/04
+  Winter 2025 Modelling/22 hierarchical classifier all_songs_since_last_own_song.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+Import Packages
+
+```{r}
+# install.packages("tidymodels")
+# install.packages('rlang')
+# install.packages("ranger")
+# install.packages("rpart.plot")
+# install.packages("vip")
+library(tidyverse)
+library(tidymodels)
+library(rpart.plot) # for plotting decision tree
+library(vip) # for ranking feature importance
+library(ranger) # engine for random forest
+
+# set random seed
+set.seed(42)
+```
+
+Load data
+
+```{r}
+MODEL_TYPE <- "Hierarchical Classifier All songs since last own song"
+
+data_list <- list()
+
+# TO RUN MODEL ON ALL 11 FOCAL MALES:
+folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\data\\by_id"
+files = list.files(folder_path, full.names=TRUE)
+
+# for (file in files) {
+#     data_list <- append(data_list, list(read_csv(file)))
+# }
+
+# # TO RUN MODEL ON 1 FOCAL MALE:
+file_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\data\\by_id\\LbOW_song_type_id_frequency.csv" # TODO: Set file path to data for desired focal male
+data_list <- append(data_list, list(read_csv(file_path)))
+```
+
+```{r}
+# Step 1: Add labels to song types of low, medium, and high quantity songs
+    # - How do we determine these labels?
+# 2. Remove low quantity songs
+# 3. Train two separate classifiers for each focal male, on only medium and high quantity songs
+# 4. Train a classifier to determine whether a song is medium or high quantity, then feed it to the relevant classifier
+```
+
+```{r}
+# A lookup table to easily access IDs /ID numbers for each neighbourhood
+focal_males <- tibble::tribble(
+    ~neighbourhood, ~male_number, ~ID,
+    "north",  "1", "LbOW",
+    "north",  "2", "RbDgY",
+    "north",  "3", "YKY",
+    "north",  "4", "TbTbLg",
+    "north",  "5", "DgTbO",
+    "north",  "6", "RRO",
+    "centre", "1", "TbWY",
+    "centre", "2", "KRDg",
+    "centre", "3", "OPR",
+    "centre", "4", "WLpTb",
+    "centre", "5", "KLgK",
+    "centre", "6", "DgTbO"
+)
+```
+
+```{r}
+# focal_ids <- list()
+# for (i in seq_along(data_list)) {
+#     id <- data_list[[i]] %>% pull(ID) %>% unique()
+#     # print(id)
+#     focal_ids[[id]] <- id
+# }
+focal_ids <- list("LbOW")
+# names(data_list) <- focal_ids
+names(data_list) <- "LbOW"
+```
+
+```{r}
+map(data_list, ~ head(.x, 3))
+```
+
+```{r}
+# In data (training AND testing), how many of each song type for the focal male?
+for (i in seq_along(data_list)) {
+    cat("All song types for", data_list[[i]] %>% pull(ID) %>% unique(), ':\n')
+    n_ust <- data_list[[i]] %>%
+        group_by(UST) %>%
+        summarize(n = n()) %>%
+        mutate(percent = 100*n/nrow(data_list[[i]])) %>%
+        arrange(desc(percent)) %>%
+        # Classes for hierarchical classifer
+        mutate(class = case_when(n > 80 ~ as.character(3), n > 30 ~ as.character(2), n > 0 ~ as.character(1), .default = as.character(0)))
+    
+    data_list[[i]] <- data_list[[i]] %>% left_join(n_ust %>% select(UST, class), by="UST")
+    print(n_ust)
+    # print(data_list[[i]]$class)
+}
+```
+
+```{r}
+# Set data types and select input columns
+for (i in seq_along(data_list) ){
+    focal_male_number <- data_list[[i]] %>% pull(male_number) %>% unique()
+    data_list[[i]] <- data_list[[i]] %>% 
+        mutate(across(contains("UST"), ~ as.factor(.x)),
+            # across(contains("ust"), ~ as.integer(.x)), 
+            does_it_match = as.factor(does_it_match),
+            number_of_matches = as.integer(number_of_matches)) %>%
+        select(
+            # Response
+            "UST",
+
+            # All neighbours' songs since last own song
+            contains("n_ust_"),
+            -contains("window"), # Don't include the # ust columns that use a time window
+            # Own song history (song types)
+            sprintf("M%i_1_last_UST", focal_male_number),
+            sprintf("M%i_2_last_UST", focal_male_number),
+            # sprintf("M%i_3_last_UST", focal_male_number),
+
+            # Own song history (time since last songs)
+            sprintf("time_since_M%i_1_last_song", focal_male_number),
+            sprintf("time_since_M%i_2_last_song", focal_male_number),        
+            # sprintf("time_since_M%i_3_last_song", focal_male_number),
+            class
+        )  %>%
+        drop_na() # drop any row containing at least one NA value
+}
+```
+
+```{r}
+# --- LEVEL 1: PREDICTING THE CLASS ---
+# Combine all data to train the master class-predictor
+full_data_for_class_model <- bind_rows(data_list)
+
+# Split and Recipe
+class_split <- initial_split(full_data_for_class_model, prop = 0.7, strata = class)
+class_train <- training(class_split)
+class_test  <- testing(class_split)
+
+class_recipe <- recipe(class ~ ., data = class_train) %>%
+    step_rm(UST) %>% # Remove UST because it's the target of the Level 2 models
+    step_scale(all_numeric()) %>%
+    step_center(all_numeric())
+
+# Define and Fit Model (using a Random Forest example)
+class_spec <- rand_forest(trees = 500) %>% 
+    set_mode("classification") %>% 
+    set_engine("ranger")
+
+class_workflow <- workflow() %>%
+    add_recipe(class_recipe) %>%
+    add_model(class_spec) %>%
+    fit(data = class_train)
+
+# --- PREDICT CLASS FOR THE ENTIRE DATASET ---
+# We replace the 'actual' class with the 'predicted' class for the next stage
+data_with_predicted_classes <- full_data_for_class_model %>%
+    mutate(predicted_class = predict(class_workflow, full_data_for_class_model)$.pred_class)
+```
+
+```{r}
+# Create model specification
+model_tuning_spec <- rand_forest(mtry = tune(), trees = 1000, min_n=tune()) %>%
+    set_engine("ranger", importance = "impurity") %>% # importance = impurity measures feature importance (using gini impurity reduction), used for vip() later
+    set_mode("classification")
+
+tune_grid <- tidyr::crossing(
+    mtry = c(4, 8, 12, 16, 20), # The number of variables randomly sampled as candidates at each split
+    min_n = c(2, 5, 10, 15, 20) # Minimum number of data points in a node required for a split
+)
+eval_metrics <- metric_set(accuracy, precision, recall)
+```
+
+```{r}
+# Train models
+
+models_list <- list()
+training_datasets <- list()
+testing_datasets <- list()
+
+for (id in focal_ids) {
+    class_list <- list()
+    training_datasets[[id]] <- list()
+    testing_datasets[[id]] <- list()
+
+    for (class in data_list[[id]]$predicted_class %>% unique()) {
+        data <- data_list[[id]] %>% filter(class == predicted_class) %>% select(-predicted_class)
+        # train test split
+        train_test_split <- initial_split(data, prop = 0.7, strata=UST)
+
+        train_data <- train_test_split %>% training()
+        training_datasets[[id]][[class]] <- train_data
+        test_data <- train_test_split %>% testing()
+        testing_datasets[[id]][[class]] <- test_data
+
+        # In training data, how many of each song type?
+        n_ust <- train_data %>%
+            group_by(UST) %>%
+            summarize(n = n()) %>%
+            mutate(percent = 100*n/nrow(train_data)) %>%
+            arrange(percent)
+        n_ust
+
+        # use v-fold cross validation to assess model accuracy
+        v <- 5
+        train_vfold <- vfold_cv(train_data, v=v, strata = UST)
+
+
+
+        # Data preprocessing using a recipe
+        recipe <- recipe(UST ~ ., data = train_data) %>%
+            step_scale(all_numeric()) %>% # scale all numeric predictors
+            step_center(all_numeric()) # center all numeric predictors
+
+
+        model_tuning <- workflow() %>%
+            add_recipe(recipe) %>%
+            add_model(model_tuning_spec) %>%
+
+        tune_grid(resamples = train_vfold, grid=tune_grid, metrics = eval_metrics) # for v-fold cross validation, tuning k parameter
+        # fit(data = train_data) # to train on whole train set with no validation set
+
+        model_tuning
+
+        # Accuracies listed use 5-fold cross validation
+        model_tuning_accuracies <- model_tuning %>% collect_metrics() %>% arrange(.metric) #  %>% filter(.metric == "accuracy")
+        model_tuning_accuracies
+
+        # plot accuracies of all values of hyperparameters
+
+        ggplot(model_tuning_accuracies %>% filter(.metric == "accuracy")) +
+            geom_tile(aes(x=mtry, y=min_n, fill=mean)) +
+            geom_text(aes(x=mtry, y=min_n, label=round(mean, 2), size=5)) +
+            labs(x = "Randomly Sampled Variables", y = "Minimum Samples to Split", color="Estimated Accuracy", title="Accuracy") +
+            theme(text = element_text(size=20)) +
+            scale_fill_gradient(low="white", high="red")
+
+        # Print best hyperparameter values
+        best_params <- model_tuning_accuracies %>% arrange(desc(mean)) %>% head(1) %>% pull(mtry, min_n)
+        print("Best hyperparameters: (mtry, min_n)")
+        print(best_params)
+
+        # retrain model on best parameters
+        best_params <- model_tuning %>%
+        select_best()
+        print("Best Parameters:")
+        print(best_params)
+
+        model <- workflow() %>%
+            add_recipe(recipe) %>%
+            add_model(model_tuning_spec) %>%
+            finalize_workflow(best_params) %>%
+            # fit_resamples(resamples = train_vfold) # for v-fold cross validation
+            fit(data = train_data) # to train on whole train set with no validation set
+
+        
+        class_list[[class]] <- model
+    }
+    models_list[[id]] <- class_list
+}
+names(models_list) <- focal_ids
+names(training_datasets) <- focal_ids
+names(testing_datasets) <- focal_ids
+```
+
+```{r}
+models <- tibble(
+    id = focal_ids,
+    models = list(models_list),
+    train_data = list(training_datasets),
+    test_data = list(testing_datasets)
+)
+```
+
+```{r}
+final_predictions_list <- list()
+
+for (id in focal_ids) {
+    
+    # Check if this ID actually exists in our models
+    if (!(id %in% names(models_list))) {
+        warning(paste("ID", id, "not found in models_list"))
+        next
+    }
+
+    # Get the classes available for this specific male
+    available_classes <- names(models_list[[id]])
+    
+    male_results <- map_dfr(available_classes, function(class_name) {
+        
+        # 1. Extract the model
+        current_model <- models_list[[id]][[class_name]]
+        
+        # 2. Extract the data safely using [[ ]] or filter()
+        # Using the specific class-based test set you created earlier
+        class_test_subset <- testing_datasets[[id]][[class_name]]
+        
+        # Sanity check: does data exist for this class?
+        if (!is.null(class_test_subset) && nrow(class_test_subset) > 0) {
+            
+            preds <- predict(current_model, class_test_subset)
+            
+            # Combine and return
+            return(bind_cols(preds, class_test_subset) %>%
+                mutate(focal_id = id, assigned_class = class_name))
+        } else {
+            return(NULL) # Skip if no data
+        }
+    })
+    
+    # Only add to list if we actually got results
+    if (nrow(male_results) > 0) {
+        final_predictions_list[[id]] <- male_results
+    }
+}
+
+# Final merge
+all_results <- bind_rows(final_predictions_list)
+
+# Check the output
+print(paste("Rows in all_results:", nrow(all_results)))
+head(all_results)
+```
+
+```{r}
+library(yardstick)
+
+# Total Global Accuracy
+total_perf <- all_results %>%
+  metrics(truth = UST, estimate = .pred_class)
+
+# Accuracy per Focal Male
+male_perf <- all_results %>%
+  group_by(focal_id) %>%
+  metrics(truth = UST, estimate = .pred_class)
+
+# Accuracy per Class (to see if "Rare" classes perform worse than "Common")
+class_perf <- all_results %>%
+  group_by(assigned_class) %>%
+  metrics(truth = UST, estimate = .pred_class)
+
+print(class_perf)
+```
+
+```{r}
+# Train a model for each focal male
+# input: same inputs as before
+# output: class
+
+# get the test data along with predicted class
+# then divide data up by predicted class,
+# run it through model of relevant class,
+# compute total accuracy of all the models
+```
+
+```{r}
+# Visualizing the confusion for a specific male
+all_results %>%
+  filter(focal_id == focal_ids[1]) %>%
+  conf_mat(truth = UST, estimate = .pred_class) %>%
+  autoplot(type = "heatmap")
+```
+
+```{r}
+for (id in focal_ids) {
+  model <- models_list[[id]]
+  male_number <- focal_males %>% filter(ID == id) %>% pull(male_number)
+  neighbourhood <- focal_males %>% filter(ID == id) %>% pull(neighbourhood)
+  importance_chart <- model %>% extract_fit_engine() %>% vip(num_features=10) +
+    labs(title=paste(id, MODEL_TYPE, male_number, neighbourhood)) +
+    theme_bw() + # Starting with a clean theme
+    theme(
+      axis.text.x = element_text(size = 14),       # X-axis tick labels
+      axis.text.y = element_text(size = 12),       # Y-axis tick labels
+      axis.title.x = element_text(size = 16),      # X-axis title
+      axis.title.y = element_text(size = 16),      # Y-axis title
+      plot.title = element_text(size = 16, face = "bold"), # Main plot title
+      legend.text = element_text(size = 12),       # Legend labels
+      legend.title = element_text(size = 14)       # Legend title
+    )
+  print(importance_chart)
+  cat(id, male_number, '\n')
+  ggsave(paste(MODEL_TYPE, id, "importance.png"), plot=importance_chart)
+}
+```
+
+```{r}
+# Predict on the test set, and create a new DataFrame with inputs and outputs
+# Return the accuracy, precision, and recall of our model
+
+all_test_accuracies = tibble()
+all_song_accuracies = tibble()
+
+for (id in focal_ids) {
+    View(id)
+    test_data <- testing_datasets[[id]]
+    model <- models_list[[id]]
+    test_predictions <- model %>% predict(test_data) %>%
+        bind_cols(test_data)
+    test_accuracy <- test_predictions %>% 
+        metrics(truth = UST, estimate = .pred_class) %>% 
+        filter(.metric == "accuracy") %>% 
+        rename(estimated_accuracy = .estimate) %>%
+        mutate(ID = id, model=MODEL_TYPE) %>%
+        select(ID, estimated_accuracy, model)
+        # TODO: Add other features such as repertoire size, size of territory, neighbourhood
+        #%>% pull(.estimate) %>% round(3)
+    View(test_accuracy)
+    all_test_accuracies <- all_test_accuracies %>% bind_rows(test_accuracy)
+
+    test_song_accuracies <- test_predictions %>% group_by(UST) %>% 
+        metrics(truth = UST, estimate = .pred_class) %>% 
+        filter(.metric == "accuracy") %>% 
+        arrange(desc(.estimate)) %>% 
+        mutate(ID = id, model=MODEL_TYPE) %>%
+        select(ID, UST, .estimate, model) %>% 
+        rename(estimated_accuracy = .estimate) %>%
+        left_join(n_ust %>% select(UST, n), by = "UST")
+    View(test_song_accuracies)
+    all_song_accuracies <- all_song_accuracies %>% bind_rows(test_song_accuracies)
+
+    # View(test_predictions %>% group_by(UST) %>% precision(truth = UST, estimate = .pred_class, event_level = "multiclass") %>% arrange(desc(.estimate))) # Precision = correct positive predictions / total positive predictions
+    # View(test_predictions %>% group_by(UST) %>% recall(truth = UST, estimate = .pred_class, event_level = "multiclass") %>% arrange(desc(.estimate))) # Recall = correct positive predictions / total positive test set observations
+
+    confusion_matrix <- test_predictions %>%
+    conf_mat(truth = UST, estimate = .pred_class)
+    print(confusion_matrix)
+}
+```
+
+```{r}
+filename <- paste0("data/results/", MODEL_TYPE, "_test_accuracies.csv")
+print(filename)
+write_csv(all_test_accuracies, filename)
+
+filename <- paste0("data/results/", MODEL_TYPE, "_song_accuracies.csv")
+print(filename)
+write_csv(all_song_accuracies, filename)
+```
+

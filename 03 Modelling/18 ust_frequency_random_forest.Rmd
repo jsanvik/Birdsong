@@ -28,6 +28,7 @@ set.seed(42)
 Load data
 
 ```{r}
+folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong"
 data <- read_csv("data/song_type_id_frequency.csv")
 ```
 

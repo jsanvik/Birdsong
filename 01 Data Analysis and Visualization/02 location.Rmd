@@ -14,7 +14,7 @@ library(tidyverse)
 
 ```{r}
 # import data
-data <- read_csv("../data/megazord.csv")
+data <- read_csv("data/megazord.csv")
 ```
 
 When given the dataset, I saw lattitute and longitude, and my first instinct was to plot them to visualize where the birds all are.  
@@ -52,18 +52,18 @@ ggplot() +
 ```{r}
 # Flight paths, colour by individual
 ggplot() +
-    geom_path(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID)) +
-    geom_path(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID)) +
-    geom_path(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID)) +
-    geom_path(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID)) +
-    geom_path(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID)) +
-    geom_path(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID)) +
-    geom_point(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID)) +
+    geom_path(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M1_Lat, x = M1_Lon, color=ID, shape=neighbourhood)) +
+    geom_path(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M2_Lat, x = M2_Lon, color=ID, shape=neighbourhood)) +
+    geom_path(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M3_Lat, x = M3_Lon, color=ID, shape=neighbourhood)) +
+    geom_path(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M4_Lat, x = M4_Lon, color=ID, shape=neighbourhood)) +
+    geom_path(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M5_Lat, x = M5_Lon, color=ID, shape=neighbourhood)) +
+    geom_path(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID, shape=neighbourhood)) +
+    geom_point(data = data, aes(y = M6_Lat, x = M6_Lon, color=ID, shape=neighbourhood)) +
     ylab("Latitude") +
     xlab("Longitude")
 ```

@@ -9,14 +9,16 @@ University of Lethbridge Student ID: 001224816
 
 ```{r}
 # Import packages
+# install.packages("slider")
 library(tidyverse)
+library(slider)
 options(repr.matrix.max.cols = Inf) # display all columns in tibbles
 ```
 
 ```{r}
 # A lookup table to easily access IDs /ID numbers for each neighbourhood
 focal_males <- tibble::tribble(
-    ~neighbourhood, ~male_number, ~ID,
+    ~neighbourhood, ~male_number, ~id,
     "north",  "1", "LbOW",
     "north",  "2", "RbDgY",
     "north",  "3", "YKY",
@@ -44,19 +46,19 @@ raw_data <- raw_data %>% filter(neighbourhood != "south")
 
 neighbourhoods <- sort(unique(na.omit(raw_data$neighbourhood)))
 focal_ids <- unique(na.omit(raw_data$ID))
-
-data_list <- list()
-
-for (id in focal_ids) {
-    cat(id, focal_males %>% filter(ID == id) %>% pull(neighbourhood), "\n")
-    data_to_append <- raw_data %>% filter(neighbourhood %in% (focal_males %>% filter(ID == id) %>% pull(neighbourhood)))
-    data_list <- append(data_list, list(data_to_append))
-}
-names(data_list) <- focal_ids
 ```
 
 ```{r}
-length(data_list)
+data_list <- list()
+
+for (focal_id in focal_ids) {
+    cat(focal_id, focal_males %>% filter(id == focal_id) %>% pull(neighbourhood) %>% unique(), "\n")
+    data_to_append <- raw_data %>% filter(neighbourhood %in% (focal_males %>% filter(id == focal_id) %>% pull(neighbourhood)))
+    data_list <- append(data_list, list(data_to_append))
+}
+names(data_list) <- focal_ids
+
+print(length(data_list))
 ```
 
 ```{r}
@@ -70,8 +72,15 @@ for (id in focal_ids) {
 ```
 
 ```{r}
-# Which song types are present in each focal male's neighbourhood(s)?
-data_list %>% map(~ print(sort(na.omit(unique(.x$UST)))))
+# # Which song types are present in each focal male's neighbourhood(s)?
+# data_list %>% map(~ print(sort(na.omit(unique(.x$UST)))))
+```
+
+```{r}
+for (focal_id in focal_ids) {
+    repertoire <- data_list[[focal_id]] %>% filter(ID == focal_id) %>% arrange(UST) %>% pull(UST) %>% unique
+    data_list[[focal_id]] <- data_list[[focal_id]] %>% mutate(UST = if_else(UST %in% repertoire, UST, -1))  # we set song types outside of the focal male's repertoire to -1
+}
 ```
 
 ```{r}
@@ -112,22 +121,44 @@ for (focal_id in focal_ids) {
 ```
 
 ```{r}
-# focal_males %>% filter(neighbourhood == focal_neighbourhood) %>% filter(male_number == i) %>% pull(ID)
-# # mutate("{n_last_song}" := if_else(ID == focal_males[[i]], lag(UST, n-1), NA))
+# Number of times the focal male has heard each song type in last <WINDOW_SIZE> seconds
+
+WINDOW_SIZE <- 60
+for (focal_id in focal_ids) {
+  
+  # Start with the focal male's data
+  main_df <- data_list[[focal_id]] %>% arrange(DateTime)
+  
+
+  for (song_type in all_song_types) {
+        window_col <- sprintf("n_ust_%i_window", song_type)
+
+    main_df <- main_df %>%
+      mutate(
+        is_others_song = (ID != focal_id & UST == song_type)
+      ) %>%
+      mutate(
+        !!window_col := slide_index_sum(x = is_others_song, i = DateTime, before = WINDOW_SIZE)
+      ) %>%
+      select(-is_others_song) # Remove temporary columns
+  }
+  
+  data_list[[focal_id]] <- main_df
+}
 ```
 
 ```{r}
 # Calculate time since each Male's last song
 # Male i's nth last song
 
-N_MAX <- 3 # Find 1st - 3rd last song thypes
+N_MAX <- 3 # Find 1st - 3rd last song types
 
 for (focal_id in focal_ids) {
         focal_neighbourhood <- data_list[[focal_id]] %>% pull(neighbourhood) %>% unique
-        print(focal_neighbourhood)
+        # print(focal_neighbourhood)
         for (n in 1:N_MAX) {
                 for (i in 1:6) {
-                        id <- focal_males %>% filter(neighbourhood == focal_neighbourhood) %>% filter(male_number == i) %>% pull(ID)
+                        id <- focal_males %>% filter(neighbourhood == focal_neighbourhood) %>% filter(male_number == i) %>% pull(id)
                         n_last_song <- sprintf("M%i_%i_last_UST", i, n)
                         time_last_song <- sprintf("time_M%i_%i_last_song", i, n)
                         time_since_last_song <- sprintf("time_since_M%i_%i_last_song", i, n)
@@ -161,12 +192,289 @@ for (focal_id in focal_ids) {
 ```
 
 ```{r}
+# This might be more efficient, but hasn't been tried yet. (Gemini helped turn the code in the next cell into more efficient vectorized operations)
+
+# WINDOW_SIZE <- 60
+
+# for (focal_id in focal_ids) {
+#     # Prep the focal data
+#     df <- data_list[[focal_id]] %>% arrange(DateTime)
+#     focal_nb <- df$neighbourhood[1]
+    
+#     # R1: Focal count 
+#     R1_name <- sprintf("focal_last_%i_seconds_n_songs", WINDOW_SIZE)
+#     df[[R1_name]] <- slide_index_int(
+#         .x = (df$ID == focal_id), 
+#         .i = df$DateTime, 
+#         .before = seconds(WINDOW_SIZE), 
+#         .f = sum
+#     )
+
+#     # Get the list of potential neighbors
+#     neighbors <- focal_males %>% filter(neighbourhood == focal_nb, id != focal_id)
+    
+#     # 2. Extract vectors (for efficiency)
+#     ids <- df$ID
+#     usts <- df$UST
+#     dts <- df$DateTime
+
+#     for (i in 1:nrow(neighbors)) {
+#         n_id <- neighbors$id[i]
+#         n_num <- neighbors$male_number[i]
+        
+#         R2_name <- sprintf("M%i_last_%i_seconds_n_songs", n_num, WINDOW_SIZE)
+#         C_name  <- sprintf("M%i_last_%i_seconds_shared_songs", n_num, WINDOW_SIZE)
+        
+#         # Calculate R2 and C
+#         res <- slide_index(
+#             .i = dts,
+#             .before = seconds(WINDOW_SIZE),
+#             .f = function(idx) {
+#                 # Subset vectors using the index provided by slider
+#                 window_ids <- ids[idx]
+#                 window_usts <- usts[idx]
+                
+#                 # Logical vectors for filtering
+#                 is_focal <- window_ids == focal_id
+#                 is_neighbor <- window_ids == n_id
+                
+#                 focal_songs <- window_usts[is_focal]
+#                 neighbor_songs <- window_usts[is_neighbor]
+                
+#                 # Shared count: songs in focal set that exist in neighbor set
+#                 shared <- if(length(neighbor_songs) > 0) {
+#                     sum(focal_songs %in% neighbor_songs)
+#                 } else { 0L }
+                
+#                 c(length(neighbor_songs), shared)
+#             }
+#         )
+        
+#         # Fast unlisting
+#         res_mat <- do.call(rbind, res)
+#         df[[R2_name]] <- as.integer(res_mat[,1])
+#         df[[C_name]]  <- as.integer(res_mat[,2])
+#     }
+    
+#     data_list[[focal_id]] <- df
+# }
+```
+
+```{r}
+WINDOW_SIZE <- 60
+
+for (focal_id in focal_ids) {
+    focal_neighbourhood <- data_list[[focal_id]] %>% pull(neighbourhood) %>% unique()
+    data_list[[focal_id]] <- data_list[[focal_id]] %>% arrange(DateTime)
+    
+    # R1 Create a feature counting how many songs were sung by focal male in time window
+    R1 <- sprintf("focal_last_%i_seconds_n_songs", WINDOW_SIZE)
+    data_list[[focal_id]] <- data_list[[focal_id]] %>%
+        mutate("{R1}" := slide_index_int(
+            .x = ID, .i = DateTime, .before = seconds(WINDOW_SIZE),
+            .f = ~sum(.x == focal_id)
+        ))
+
+    # R2 Create a feature for each neighbour counting how many songs they sung in time window
+    # C Create a feature for each neighbour counting all songs that were sung in the last 1-minute of shared type with neighbour
+    
+    for (i in 1:6) {
+        neighbor_id <- focal_males %>% filter(neighbourhood == focal_neighbourhood, male_number == i) %>% pull(id)
+        if (neighbor_id == focal_id) {next}
+        
+        R2 <- sprintf("M%i_last_%i_seconds_n_songs", i, WINDOW_SIZE)
+        C  <- sprintf("M%i_last_%i_seconds_shared_songs", i, WINDOW_SIZE)
+        
+        result <- data_list[[focal_id]] %>%
+            mutate(
+                temp_list = slide_index(
+                    .x = pick(everything()), # 'pick' replaces cur_data_all safely
+                    .i = DateTime,
+                    .before = seconds(WINDOW_SIZE),
+                    .after = 0,
+                    .f = function(window_df) {
+                        focal_songs <- window_df$UST[window_df$ID == focal_id]
+                        neighbour_songs <- window_df$UST[window_df$ID == neighbor_id]
+                        
+                        list(
+                            n_count = length(neighbour_songs),
+                            shared_count = sum(focal_songs %in% intersect(focal_songs, neighbour_songs))
+                        )
+                    }
+                )
+            )
+        
+        # Extract the list into proper columns
+        data_list[[focal_id]][[R2]] <- map_int(result$temp_list, "n_count")
+        data_list[[focal_id]][[C]]  <- map_int(result$temp_list, "shared_count")
+    }
+}
+```
+
+```{r}
+# Use the three columns we just created to calculate "attention" value
+for (focal_id in focal_ids) {
+    focal_neighbourhood <- data_list[[focal_id]] %>% pull(neighbourhood) %>% unique()
+    R1 <- sprintf("focal_last_%i_seconds_n_songs", WINDOW_SIZE)
+    for (i in 1:6) {
+        neighbor_id <- focal_males %>% filter(neighbourhood == focal_neighbourhood, male_number == i) %>% pull(id)
+        if (neighbor_id == focal_id) {next}
+
+        attention_col <- sprintf("Attention_on_M%i", i)
+        R2 <- sprintf("M%i_last_%i_seconds_n_songs", i, WINDOW_SIZE)
+        C  <- sprintf("M%i_last_%i_seconds_shared_songs", i, WINDOW_SIZE)
+
+        data_list[[focal_id]] <- data_list[[focal_id]] %>% mutate(
+            "{attention_col}" := (2*!!sym({C})) / (!!sym(R1) + !!sym(R2)),
+        )
+    }
+}
+```
+
+```{r}
+# Determine "Attention Target" by comparing shared songs sung in last <WINDOW_SIZE>
+
+id_lookup <- focal_males %>%
+  mutate(male_number = as.character(male_number)) %>%
+  select(id, male_number, neighbourhood)
+
+for (focal_id in focal_ids) {
+  attention_data <- data_list[[focal_id]] %>% select(contains("Attention_on_M"))
+  
+  data_list[[focal_id]] <- data_list[[focal_id]] %>%
+    mutate(
+      highest_attention = do.call(pmax, c(attention_data, na.rm = TRUE)),
+
+      attention_target_male_number = if_else(
+        highest_attention > 0,
+        sub("Attention_on_M", "", names(attention_data)[max.col(attention_data, ties.method = "first")]),
+        NA_character_
+      )
+    ) %>%
+
+    left_join(
+      id_lookup, 
+      by = c("attention_target_male_number" = "male_number", "neighbourhood" = "neighbourhood"),
+      suffix = c("", "_neighbor")
+    ) %>%
+    rename(attention_target_id = id) %>%
+    # If no attention target, use string "None" instead of NA values (needed so row isn't dropped by models)
+    mutate(attention_target_id = replace_na(attention_target_id, "None"))
+}
+```
+
+```{r}
+# Count the number of each song type sang by the attention target and by all other males in the time window
+
+WINDOW_SIZE <- 60
+for (focal_id in focal_ids) {
+  
+  # Start with the focal male's data
+  main_df <- data_list[[focal_id]] %>% arrange(DateTime)
+  
+  # Create a "Lookup" of every song ever sung
+
+  all_songs <- main_df %>% 
+    select(DateTime, SingerID = ID, SongType = UST)
+
+  for (song_type in all_song_types) {
+    
+    target_col <- sprintf("n_ust_%i_target_window", song_type)
+    others_col <- sprintf("n_ust_%i_others_window", song_type)
+
+    main_df <- main_df %>%
+      mutate(
+        # Temporary logical columns for this specific song type
+        is_target_song = (ID == attention_target_id & UST == song_type),
+        is_others_song = (ID != focal_id & ID != attention_target_id & UST == song_type)
+      ) %>%
+      mutate(
+        # slide_index_sum is a "vectorized" version of the window sum
+        !!target_col := slide_index_sum(x = is_target_song, i = DateTime, before = WINDOW_SIZE),
+        !!others_col := slide_index_sum(x = is_others_song, i = DateTime, before = WINDOW_SIZE)
+      ) %>%
+      select(-is_target_song, -is_others_song) # Remove temporary columns
+  }
+  
+  data_list[[focal_id]] <- main_df
+}
+```
+
+```{r}
+for (song_type in all_song_types) {
+    
+    target_col <- sprintf("n_ust_%i_target_window", song_type)
+    others_col <- sprintf("n_ust_%i_others_window", song_type)
+
+    main_df <- main_df %>%
+      mutate(
+        # Temporary logical columns for this specific song type
+        is_target_song = (ID == attention_target_id & UST == song_type),
+        is_others_song = (ID != focal_id & ID != attention_target_id & UST == song_type)
+      ) %>%
+      mutate(
+        # slide_index_sum is a "vectorized" version of the window sum
+        !!target_col := slide_index_sum(x = is_target_song, i = DateTime, before = WINDOW_SIZE),
+        !!others_col := slide_index_sum(x = is_others_song, i = DateTime, before = WINDOW_SIZE)
+      ) %>%
+      select(-is_target_song, -is_others_song) # Remove temporary columns
+  }
+```
+
+```{r}
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  tab <- table(x)
+  # Returns the name of the attribute with the maximum count
+  names(tab)[which.max(tab)]
+}
+```
+
+```{r}
+# Used to count the nth most common x (song) when y (neighbour) equals z (neighbour we want to count) in a DataFrame
+get_nth_mode <- function(x, y, z, n = 2) {
+  neighbour_songs <- x[y == z]
+  counts <- sort(table(neighbour_songs), decreasing = TRUE)
+  if (length(counts) < n) {
+    return(NA_character_)
+  } else {
+    return(names(counts)[n])
+  }
+}
+```
+
+```{r}
+# Feature to determine which song type had the highest count FOR EACH NEIGHBOUR in the last <WINDOW_SIZE> seconds
+
+WINDOW_SIZE = 60
+
+for (focal_id in focal_ids) {
+    for (i in 1:6) {
+        neighbor_id <- focal_males %>% filter(neighbourhood == focal_neighbourhood, male_number == i) %>% pull(id)
+        # Count number of each song type sang in time window
+        for (j in 1:3) {
+            highest_song <- sprintf("M%i_%i_highest_UST_%i_seconds", i, j, WINDOW_SIZE)
+            data_list[[focal_id]] <- data_list[[focal_id]] %>% mutate(
+                !!highest_song := slide_index_chr(
+                    .x = UST,
+                    .y = ID,
+                    .i = DateTime,
+                    .f = ~get_nth_mode(.x, .y, neighbor_id, n=i),
+                    .before=WINDOW_SIZE
+                )
+            )
+        }
+    }
+}
+```
+
+```{r}
 # Select relevant predictors
 for (focal_id in focal_ids) {
     data_list[[focal_id]] <- data_list[[focal_id]] %>%
         filter(ID == focal_id) %>%
         select(
-            # ID, # TODO: remove this column
+            ID,
             UST,
             DateTime, time_rel_sunrise,
             "D_M1_M2", "D_M1_M3", "D_M1_M4", "D_M1_M5", "D_M1_M6",
@@ -176,10 +484,17 @@ for (focal_id in focal_ids) {
             time_since_M1_1_last_song,
             DateTime, time_rel_sunrise,
             contains("n_ust_"), # n_ust_X = Number of times song type X has been heard since M1's last song
+            contains("matches_"),
             # time_M1_last_song, time_M2_last_song, time_M3_last_song, time_M4_last_song, time_M5_last_song, time_M6_last_song,
             # time_since_M1_last_song, time_since_M2_last_song, time_since_M3_last_song, time_since_M4_last_song, time_since_M5_last_song, time_since_M6_last_song, # did not include time since M1 last song because it is always 0
-            number_of_matches, does_it_match
-            # Also consider adding "streak"
+            number_of_matches, does_it_match,
+            contains("shared_songs"),
+            contains("Attention"),
+            contains("attention"),
+            contains("target"),
+            contains("others"),
+            contains("highest_UST"), # Nth Most common song types from each neighbour in time window
+            male_number
         )
 }
 ```

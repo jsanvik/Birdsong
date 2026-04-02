@@ -6,35 +6,45 @@ output: html_document
 
 ```{r}
 library(rmarkdown)
-# 1. Set the path to your folder
-# Replace 'path/to/your/folder' with your actual directory path
-folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\04 Winter 2025 Modelling"
+```
 
-# 2. List all .ipynb files in the folder
-ipynb_files <- list.files(path = folder_path, 
-                          pattern = "\\.ipynb$", 
+```{r}
+folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong"
+
+folder_paths <- list.files(path = folder_path, 
                           full.names = TRUE)
 
-# 3. Check if any files were found
-if (length(ipynb_files) == 0) {
-  cat("No Jupyter Notebooks found in the specified directory.\n")
-} else {
-  cat("Found", length(ipynb_files), "notebooks. Starting conversion...\n")
-  
-  # 4. Loop through and convert each file
-  for (file in ipynb_files) {
-    # Generate the output filename (replaces .ipynb with .Rmd)
-    output_file <- sub("\\.ipynb$", ".Rmd", file)
+# Check if any files were found
+
+for (path in folder_paths) {
+    if (!dir.exists(path)) {
+        cat(path, " not a folder. \n")
+    } else if (length(path) == 0) {
+    cat("No Jupyter Notebooks found in the specified directory.\n")
+    } else {
     
-    tryCatch({
-      convert_ipynb(file, output = output_file)
-      cat("Successfully converted:", basename(file), "\n")
-    }, error = function(e) {
-      cat("Error converting", basename(file), ":", conditionMessage(e), "\n")
-    })
+
+    new_path <- list.files(path = path, 
+                            pattern = "\\.ipynb$", 
+                            full.names = TRUE)
+    cat(path, "\n", "Found", length(new_path), "notebooks. Starting conversion...\n")
+
+    for (file in new_path) {
+        # Generate the output filename (replaces .ipynb with .Rmd)
+        output_file <- sub("\\.ipynb$", ".Rmd", file)
+        print(file)
+
+        tryCatch({
+            convert_ipynb(file, output = output_file)
+            cat("Successfully converted:", basename(file), "\n")
+        }, error = function(e) {
+            cat("Error converting", basename(file), ":", conditionMessage(e), "\n")
+        })
   }
+    }
   
-  cat("\nConversion process complete.\n")
 }
+
+cat("\nConversion process complete.\n")
 ```
 

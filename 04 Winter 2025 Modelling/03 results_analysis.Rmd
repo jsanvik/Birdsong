@@ -1,0 +1,103 @@
+---
+title: An R Markdown document converted from "C:\Users\johna\OneDrive\Documents\Birdsong/04
+  Winter 2025 Modelling/03 results_analysis.ipynb"
+output: html_document
+---
+
+John S. Anvik, 2025  
+University of Lethbridge Student ID: 001224816
+
+```{r}
+# load packages
+install.packages("tidyverse")
+library(tidyverse)
+library(tidymodels)
+theme_dark()
+# set random seed
+set.seed(42)
+```
+
+```{r}
+test_accuracies <- list()
+song_accuracies <- list()
+
+folder_path <- "C:\\Users\\johna\\OneDrive\\Documents\\Birdsong\\data\\results"
+files = list.files(folder_path, full.names=TRUE)
+
+for (file in files) {
+    print(file)
+    name <- as.character(file)
+    if (str_detect(file, "test_accuracies")) {
+        test_accuracies <- append(test_accuracies, list("{name}" = read_csv(file)))
+    } else if (str_detect(file, "song_accuracies")) {
+        song_accuracies <- append(song_accuracies, list("{file}" = read_csv(file)))
+    }
+}
+
+test_accuracies <- bind_rows(test_accuracies)
+song_accuracies <- bind_rows(song_accuracies)
+```
+
+```{r}
+test_accuracies %>% pull(model) %>% unique()
+```
+
+```{r}
+# TODO: Throw in baseline classifer
+plot <- ggplot(data = test_accuracies %>% filter(model %in% c("Own Song History", "Most Common Songs", 'All songs since last own song')), aes(x=ID, y=estimated_accuracy, color=model, shape=model)) +
+    geom_point(size=5) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size=15)) # making x axis labels vertical
+print(plot)
+```
+
+```{r}
+# TODO: Throw in baseline classifer
+plot <- ggplot(data = test_accuracies, aes(x=ID, y=estimated_accuracy, color=model)) +
+    geom_point(size=5) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size=15)) # making x axis labels vertical
+print(plot)
+```
+
+```{r}
+
+plot <- ggplot(data = song_accuracies, aes(x=UST, y=estimated_accuracy, color=model)) +
+    geom_point(size=5)
+print(plot)
+```
+
+```{r}
+plot <- ggplot(data=song_accuracies) + 
+    aes(x=n, y=estimated_accuracy, color=model, shape=model, alpha=0.1) +
+    geom_point()
+print(plot)
+```
+
+```{r}
+song_accuracies
+```
+
+```{r}
+unique(song_accuracies$model)
+```
+
+```{r}
+# Accuracy distribution of each focal male model according to models
+ggplot(data=test_accuracies) +
+    aes(x=model, y=estimated_accuracy) + 
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size=15)) # making x axis labels vertical
+```
+
+```{r}
+# Accuracy distribution of song types according to models
+ggplot(data=song_accuracies) +
+    aes(x=model, y=estimated_accuracy) + 
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size=15)) # making x axis labels vertical
+```
+
+```{r}
+ggplot(data=test_accuracies) +
+    geom_bar(aes(x=ID, y=estimated_accuracy))
+```
+
